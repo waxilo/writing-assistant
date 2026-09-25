@@ -21,3 +21,17 @@ export class ApiError extends Error {
     this.data = data;
   }
 }
+
+/**
+ * True when `error` is a UNIQUE/PRIMARY key violation. The two engines report
+ * it completely differently (D1 throws `SqlError` with a message, mysql2 sets
+ * `code`), so callers must not pattern-match on the message alone.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const mysqlError = error as Error & { code?: string; errno?: number };
+  if (mysqlError.code === "ER_DUP_ENTRY" || mysqlError.errno === 1062) {
+    return true;
+  }
+  return /UNIQUE constraint failed|Duplicate entry/i.test(error.message);
+}

@@ -31,12 +31,17 @@ export async function snapshotChapter(
       previousWordCount
     )
     .run();
-  // Keep only the newest HISTORY_LIMIT rows for this chapter.
+  // Keep only the newest HISTORY_LIMIT rows. The extra nesting is required:
+  // MySQL rejects a subquery that selects from the table being deleted
+  // (error 1093) unless it is materialised as a derived table; SQLite accepts
+  // either form. `limit ?` binds fine on both engines.
   await env.DB.prepare(
     `delete from t_chapter_history
      where chapter_id = ? and id not in (
-       select id from t_chapter_history
-       where chapter_id = ? order by create_time desc, id desc limit ?
+       select id from (
+         select id from t_chapter_history
+         where chapter_id = ? order by create_time desc, id desc limit ?
+       ) as keep_ids
      )`
   )
     .bind(chapterId, chapterId, HISTORY_LIMIT)

@@ -1,0 +1,66 @@
+name: CI
+
+# The deployable artifact is a single Docker image (web client + API), so CI
+# builds exactly that: typecheck + unit tests for the API, a real web build,
+# and the image itself. Nothing is pushed or deployed — `docker compose up -d
+# --build` on the host is the deploy step.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  back-end:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: back-end/package-lock.json
+      - name: Install
+        working-directory: back-end
+        run: npm ci
+      - name: Typecheck
+        working-directory: back-end
+        run: npm run typecheck
+      - name: Unit tests
+        working-directory: back-end
+        run: npm test
+      - name: Bundle Node server
+        working-directory: back-end
+        run: npm run build
+
+  front-end:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: front-end/package-lock.json
+      - name: Install
+        working-directory: front-end
+        run: npm ci
+      - name: Build
+        working-directory: front-end
+        run: npm run build
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [back-end, front-end]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t writing-assistant:ci .

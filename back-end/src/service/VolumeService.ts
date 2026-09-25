@@ -41,12 +41,20 @@ export async function createVolume(
   const book = await getOwnedBook(env, userId, bookId);
   if (!book) throw new ApiError(403, "无权操作");
 
-  const row = await env.DB.prepare(
-    `insert into t_volume (book_id, title, sort_order)
-     values (?, ?, (select coalesce(max(sort_order), 0) + 1 from t_volume where book_id = ?))
-     returning *`
+  const nextOrder = await env.DB.prepare(
+    `select coalesce(max(sort_order), 0) + 1 as next from t_volume where book_id = ?`
   )
-    .bind(bookId, title?.trim() || "新卷", bookId)
+    .bind(bookId)
+    .first<{ next: number }>();
+
+  const inserted = await env.DB.prepare(
+    `insert into t_volume (book_id, title, sort_order) values (?, ?, ?)`
+  )
+    .bind(bookId, title?.trim() || "新卷", nextOrder?.next ?? 1)
+    .run();
+
+  const row = await env.DB.prepare(`select * from t_volume where id = ?`)
+    .bind(inserted.meta.last_row_id)
     .first<VolumeRow>();
   if (!row) throw new ApiError(500, "创建卷失败");
   return toVolume(row);
@@ -59,12 +67,18 @@ export async function renameVolume(
   volumeId: number,
   title: string
 ): Promise<Volume> {
-  const row = await env.DB.prepare(
+  const written = await env.DB.prepare(
     `update t_volume set title = ?
-     where id = ? and book_id in (select id from t_book where user_id = ?)
-     returning *`
+     where id = ? and book_id in (select id from t_book where user_id = ?)`
   )
     .bind(title.trim() || "新卷", volumeId, userId)
+    .run();
+  // Zero matches is the ownership check failing (`changes` counts matched
+  // rows — see the driver's `clientFoundRows`).
+  if (written.meta.changes === 0) throw new ApiError(403, "无权操作");
+
+  const row = await env.DB.prepare(`select * from t_volume where id = ?`)
+    .bind(volumeId)
     .first<VolumeRow>();
   if (!row) throw new ApiError(403, "无权操作");
   return toVolume(row);

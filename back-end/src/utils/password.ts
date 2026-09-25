@@ -1,18 +1,18 @@
-// Password hashing for Cloudflare Workers (WebCrypto only, no dependencies).
+// Password hashing (WebCrypto only, no dependencies).
 //
-// PBKDF2-SHA256 with a per-user random salt. Iterations are a deliberate
-// trade-off: OWASP recommends 600k for PBKDF2-SHA256, but Cloudflare Workers
-// free tier caps CPU at ~10ms per request and WebCrypto operations DO count
-// against it — 210k iterations reliably tripped the limit (login/register
-// returned 500). 10k iterations are far weaker than OWASP's guidance but a
-// massive upgrade over the legacy plaintext storage, and stay comfortably
-// inside the CPU budget. Bump the constant if the account is on a paid plan.
-// The iteration count is embedded in every stored hash, so existing hashes
-// (e.g. 210k from an earlier deploy) keep verifying regardless of this value.
+// PBKDF2-SHA256 with a per-user random salt, iteration count embedded in the
+// stored value (`pbkdf2$iter$salt$hash`). The count used to be 10k because
+// Cloudflare Workers' ~10ms CPU budget made 210k deriveBits calls fail login
+// and register with a 500; running self-hosted that limit is gone, so new
+// hashes use ITERATIONS below.
+//
+// `verifyPassword` derives with the count in each stored hash, so raising this
+// constant never locks out an existing account — those keep verifying at their
+// own cost until they are rewritten (on password change).
 
 import { ApiError } from "../errors.ts";
 
-const ITERATIONS = 10_000;
+const ITERATIONS = 210_000;
 const SALT_BYTES = 16;
 const KEY_BITS = 256;
 const PREFIX = "pbkdf2";
@@ -25,7 +25,8 @@ export function isHashed(stored: string): boolean {
 /** Derive a PBKDF2-SHA256 key from a password and salt; returns raw bytes. */
 async function derive(
   password: string,
-  salt: Uint8Array
+  salt: Uint8Array<ArrayBuffer>,
+  iterations: number
 ): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -35,7 +36,7 @@ async function derive(
     ["deriveBits"]
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
     key,
     KEY_BITS
   );
@@ -48,7 +49,7 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function fromBase64(input: string): Uint8Array {
+function fromBase64(input: string): Uint8Array<ArrayBuffer> {
   const binary = atob(input);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -58,7 +59,7 @@ function fromBase64(input: string): Uint8Array {
 /** Hash a plaintext password into the stored `pbkdf2$iter$salt$hash` format. */
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-  const hash = await derive(password, salt);
+  const hash = await derive(password, salt, ITERATIONS);
   return `${PREFIX}$${ITERATIONS}$${toBase64(salt)}$${toBase64(hash)}`;
 }
 
@@ -74,7 +75,7 @@ export async function verifyPassword(
   if (!Number.isSafeInteger(iterations) || iterations <= 0) return false;
 
   let expected: Uint8Array;
-  let salt: Uint8Array;
+  let salt: Uint8Array<ArrayBuffer>;
   try {
     expected = fromBase64(parts[3]);
     salt = fromBase64(parts[2]);
@@ -83,7 +84,7 @@ export async function verifyPassword(
   }
   if (expected.byteLength !== KEY_BITS / 8) return false;
 
-  const actual = await derive(password, salt);
+  const actual = await derive(password, salt, iterations);
   return constantTimeEqual(actual, expected);
 }
 

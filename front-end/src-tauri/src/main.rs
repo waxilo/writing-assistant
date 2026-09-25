@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tauri_vue_demo_lib::run()
+    writing_assistant_lib::run()
 }

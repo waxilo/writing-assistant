@@ -48,12 +48,20 @@ export async function createBook(
   title?: string
 ): Promise<Book> {
   const bookTitle = title?.trim() || "未命名书籍";
-  const row = await env.DB.prepare(
-    `insert into t_book (user_id, title, sort_order)
-     values (?, ?, (select coalesce(max(sort_order), 0) + 1 from t_book where user_id = ?))
-     returning *`
+  const nextOrder = await env.DB.prepare(
+    `select coalesce(max(sort_order), 0) + 1 as next from t_book where user_id = ?`
   )
-    .bind(userId, bookTitle, userId)
+    .bind(userId)
+    .first<{ next: number }>();
+
+  const inserted = await env.DB.prepare(
+    `insert into t_book (user_id, title, sort_order) values (?, ?, ?)`
+  )
+    .bind(userId, bookTitle, nextOrder?.next ?? 1)
+    .run();
+
+  const row = await env.DB.prepare(`select * from t_book where id = ?`)
+    .bind(inserted.meta.last_row_id)
     .first<BookRow>();
 
   if (!row) throw new ApiError(500, "创建书籍失败");
@@ -70,11 +78,15 @@ export async function renameBook(
   const owned = await getOwnedBook(env, userId, bookId);
   if (!owned) throw new ApiError(403, "无权操作");
 
-  const row = await env.DB.prepare(
+  await env.DB.prepare(
     `update t_book set title = ?, update_time = CURRENT_TIMESTAMP
-     where id = ? and user_id = ? returning *`
+     where id = ? and user_id = ?`
   )
     .bind(title?.trim() || "未命名书籍", bookId, userId)
+    .run();
+
+  const row = await env.DB.prepare(`select * from t_book where id = ?`)
+    .bind(bookId)
     .first<BookRow>();
 
   if (!row) throw new ApiError(500, "更新书籍失败");

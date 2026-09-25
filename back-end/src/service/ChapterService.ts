@@ -120,12 +120,21 @@ export async function createChapter(
   const book = await getOwnedBook(env, userId, bookId);
   if (!book) throw new ApiError(403, "无权操作");
 
-  const row = await env.DB.prepare(
-    `insert into t_chapter (book_id, title, sort_order, word_count, char_count)
-     values (?, ?, (select coalesce(max(sort_order), 0) + 1 from t_chapter where book_id = ?), 0, 0)
-     returning *`
+  const nextOrder = await env.DB.prepare(
+    `select coalesce(max(sort_order), 0) + 1 as next from t_chapter where book_id = ?`
   )
-    .bind(bookId, title?.trim() || "未命名章节", bookId)
+    .bind(bookId)
+    .first<{ next: number }>();
+
+  const inserted = await env.DB.prepare(
+    `insert into t_chapter (book_id, title, sort_order, word_count, char_count)
+     values (?, ?, ?, 0, 0)`
+  )
+    .bind(bookId, title?.trim() || "未命名章节", nextOrder?.next ?? 1)
+    .run();
+
+  const row = await env.DB.prepare(`select * from t_chapter where id = ?`)
+    .bind(inserted.meta.last_row_id)
     .first<ChapterRow>();
 
   if (!row) throw new ApiError(500, "创建章节失败");
@@ -171,14 +180,23 @@ export async function saveChapter(
   ];
   if (useVersion) args.push(input.baseVersion);
 
-  const updated = await env.DB.prepare(
+  // No `returning` on MySQL: the write is issued first and the guard is read
+  // off `changes` (0 = the version we loaded no longer matches).
+  const written = await env.DB.prepare(
     `update t_chapter
      set title = ?, content = ?, content_hash = ?, word_count = ?, char_count = ?,
          version = version + 1, update_time = CURRENT_TIMESTAMP
-     where id = ?${versionGuard} returning *`
+     where id = ?${versionGuard}`
   )
     .bind(...args)
-    .first<ChapterRow>();
+    .run();
+
+  const updated =
+    written.meta.changes === 0
+      ? null
+      : await env.DB.prepare(`select * from t_chapter where id = ?`)
+          .bind(chapterId)
+          .first<ChapterRow>();
 
   if (!updated) {
     if (useVersion) {

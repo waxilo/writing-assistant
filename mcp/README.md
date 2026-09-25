@@ -1,24 +1,26 @@
-# writer-demo-mcp
+# writing-assistant-mcp
 
-WriterDemo 写作助手 MCP server：让外部 AI（Claude Desktop、Cursor、Claude Code
+写作助手 MCP server：让外部 AI（Claude Desktop、Cursor、Claude Code
 等支持 MCP 的客户端）直接读写写作项目的**章节正文**与**设定资料库**——AI 可以
 创建人物/地点/设定条目、修改章节内容、全书搜索等。数据与网页端完全一致
-（同一套 Cloudflare API）。
+（同一套自托管 API）。
 
 ## 安装（全局，推荐）
 
 ```bash
-npm install -g writer-demo-mcp
-writer-demo-mcp login     # 登录（凭证存 ~/.writer-mcp.json，600 权限）
+npm install -g writing-assistant-mcp
+writing-assistant-mcp login     # 登录（凭证存 ~/.writer-mcp.json，600 权限）
 ```
 
-- **更新到最新版**：`npm install -g writer-demo-mcp@latest`（与安装同一个命令）
+- **更新到最新版**：`npm install -g writing-assistant-mcp@latest`（与安装同一个命令）
 - server 启动时会自动检查 npm 最新版，落后时在终端提示更新命令
 - 安装只需成功一次，之后运行不依赖网络
 
-> **npx 方式**（可选，需每次访问 registry）：`npx -y writer-demo-mcp`——网络受限环境请用全局安装。
+> **npx 方式**（可选，需每次访问 registry）：`npx -y writing-assistant-mcp`——网络受限环境请用全局安装。
 
 > 环境变量可覆盖：`WRITER_MCP_CONFIG`（凭证路径）、`WRITER_API_BASE`（API 地址）。
+
+> **从 `writer-demo-mcp` 迁移**：本包原名 `writer-demo-mcp`，已停止发布。按上面的命令装新包，并把 AI 客户端配置里的 `command`（及 `mcpServers` 的键名）改成新名字。**必须重新 `login`**：云端 Worker 已下线，旧凭证里的 `apiBase` 指向不存在的地址，而且新后端换了签名密钥，旧令牌一律不认。
 
 ## 工具清单
 
@@ -41,6 +43,18 @@ npm run login        # 输入账号密码，凭证存到 ~/.writer-mcp.json（60
 
 > 换环境变量可覆盖：`WRITER_MCP_CONFIG`（凭证路径）、`WRITER_API_BASE`（API 地址）。
 
+### API 地址怎么选
+
+| 场景 | `WRITER_API_BASE` |
+|---|---|
+| 默认（应用就跑在本机容器里） | 不用设，内置 `http://127.0.0.1:8787/api` |
+| 走公网隧道 | `https://writer.sloan.dpdns.org/api` |
+| 局域网另一台机器 | `http://192.168.x.x:8787/api` |
+
+- **末尾的 `/api` 不能省**：容器只在 `/api/*` 下提供接口，其他 GET 路径会被当成前端路由返回网页（写请求反而正常），少这个后缀的症状是"能保存但列表永远是空的"。漏了会在 `login` 时提示并自动补上。
+- **地址是随凭证保存的**（`~/.writer-mcp.json` 里的 `apiBase`），换地址要重新 `login`，改配置文件里的地址也会连带校验令牌——旧后端签发的令牌在新后端一律不认。
+- 同一台机器上优先用 `127.0.0.1`：少一跳、不依赖公网 DNS，隧道容器挂了也不影响 AI 工具。
+
 ## 接入 Claude Desktop
 
 编辑 `claude_desktop_config.json`（Claude 菜单 → Settings → Developer → Edit Config）：
@@ -48,9 +62,9 @@ npm run login        # 输入账号密码，凭证存到 ~/.writer-mcp.json（60
 ```json
 {
   "mcpServers": {
-    "writer-demo": {
+    "writing-assistant": {
       "command": "npx",
-      "args": ["-y", "writer-demo-mcp"]
+      "args": ["-y", "writing-assistant-mcp"]
     }
   }
 }
@@ -66,13 +80,13 @@ Cursor Settings → MCP → Add new MCP server → 选择 `command` 类型：
 
 ```
 command: npx
-args: -y writer-demo-mcp
+args: -y writing-assistant-mcp
 ```
 
 ## 接入 Claude Code（CLI）
 
 ```bash
-claude mcp add writer-demo -- npx -y writer-demo-mcp
+claude mcp add writing-assistant -- npx -y writing-assistant-mcp
 ```
 
 ## 注意事项

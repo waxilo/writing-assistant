@@ -1,6 +1,8 @@
-# WriterDemo
+# writing-assistant（写作助手）
 
-一个全栈写作助手示例项目，由 **Tauri + Vue 3** 桌面客户端和 **Cloudflare Workers + D1** 后端 API 组成。登录后进入书架，点击书籍进入两段式编辑页（左侧章节列表、右侧标题与正文编辑），支持手动保存与空闲自动保存。
+一个全栈写作助手项目，由 **Tauri + Vue 3** 客户端和 **Node + MySQL** 后端 API 组成。登录后进入书架，点击书籍进入两段式编辑页（左侧章节列表、右侧标题与正文编辑），支持手动保存与空闲自动保存。
+
+前后端打包进**同一个 Docker 容器**：Node 进程同时提供 API（`/api/*`）和构建后的静态页面，同源同端口；数据库复用本机通用的 `mysql-server` 容器，在其中为本项目单独建库。
 
 ## 功能
 
@@ -8,6 +10,7 @@
 - 双令牌认证：15 分钟 Access Token + 30 天 Refresh Token，刷新时轮换并检测重放；登录失败按账号 + IP 限速（15 分钟内 5 次锁定）
 - 书架：展示当前用户的书籍，支持新建、删除、进入；进入书籍后可**双击书名**直接重命名
 - 编辑页：左侧章节列表（新建、切换、删除、拖拽排序），右侧标题与正文编辑，两侧标题实时同步
+- 写作辅助：分卷（卷内章节可移动）、设定库（人物 / 地点 / 概念条目）、全书搜索与批量替换、全书大纲、章节历史版本（每章保留最近 5 次保存前快照）
 - 保存机制：`Ctrl+S` 手动保存 + 停止输入后空闲自动保存；保存带 `version` 乐观锁
 - **多会话并存**：网页端 / MCP / 多浏览器可同时在线，互不踢下线；并发写由章节与条目的乐观锁（version + 409）保证一致，冲突时字段级合并或明确提示
 - 数据按用户隔离，越权访问返回 403；关窗/登出前自动 flush 未保存内容
@@ -18,47 +21,110 @@
 - [Tauri 2](https://tauri.app/) — 跨平台桌面应用外壳（Rust）
 - [Vue 3](https://vuejs.org/) + [Vite 6](https://vitejs.dev/) + TypeScript
 - HTTP 请求走 webview 原生 `fetch`（无需 Rust 插件），`spark-md5` 仅用于前端保存判重
-- 测试：后端核心逻辑（token / 密码 / 校验）用 Node 内置 `node:test` 单测，`npm test`
 
 **后端 (`back-end/`)**
-- [Cloudflare Workers](https://developers.cloudflare.com/workers/) — 边缘运行时（无 Web 框架，手写路由）
-- [Cloudflare D1](https://developers.cloudflare.com/d1/) — 基于 SQLite 的分布式数据库
-- [Wrangler 4](https://developers.cloudflare.com/workers/wrangler/) — 开发与部署工具
+- [Node.js](https://nodejs.org/) 24 — `node:http` 收到请求后适配成 Web `Request`/`Response`，业务代码沿用无框架的手写路由，不含任何云厂商 API
+- [MySQL 8](https://dev.mysql.com/) — 通用关系库，通过兼容 D1 语句接口（`prepare().bind().all/first/run()`）的驱动层访问
+- [esbuild](https://esbuild.github.io/) — 把服务端打成单文件 `dist/server.js`
 - TypeScript
+- 测试：核心逻辑（token / 密码 / 校验）用 Node 内置 `node:test` 单测，`npm test`
+
+**部署**
+- [Docker](https://www.docker.com/) + Docker Compose — 多阶段构建出一个含前端静态文件与 API 的镜像
+- GitHub Actions 只做门禁（类型检查 / 单测 / 前端构建 / 镜像构建），不推送、不部署
 
 ## 目录结构
 
 ```
-WriterDemo/
-├── back-end/                 # Cloudflare Workers API
-│   ├── migrations/           # D1 数据库迁移脚本（0001-0005）
+writing-assistant/
+├── Dockerfile                # web 构建 + api 构建 → 单一运行镜像
+├── docker-compose.yml        # 加入 mysql-server 的网络，端口默认只绑 127.0.0.1
+├── cloudflared/config.yml    # 公网隧道的 ingress（域名 → app:8787），不含私钥
+├── .env                      # 运行时配置（不入库；由 db-init.sh 生成）
+├── scripts/
+│   ├── db-init.sh            # 一次性：建库 + 专用账号 + 建表 + 生成 .env
+│   ├── deploy.sh             # 日常部署：本地门禁 → 构建镜像 → 起容器 → 健康检查
+│   ├── tunnel-init.sh        # 可选：一次性开通 Cloudflare Tunnel 公网入口
+│   └── d1-to-mysql.mjs       # 历史归档：把旧 D1 数据导入 MySQL（含逐行回读校验）
+├── back-end/                 # Node API
+│   ├── db/schema.mysql.sql   # 全部建表语句（合并自原 D1 迁移）
 │   ├── src/
-│   │   ├── controller/       # 请求处理与输入校验（login、book、chapter、user）
-│   │   ├── service/          # 业务逻辑（Auth、Session、Book、Chapter、User）
+│   │   ├── controller/       # 请求处理与输入校验（login、book、chapter、writer、entry、user）
+│   │   ├── service/          # 业务逻辑（Auth、Session、Book、Chapter、Volume、Entry、WriteLog、User）
+│   │   ├── db/mysql.ts       # mysql2 连接池 + D1 风格语句适配
 │   │   ├── middleware/       # 认证中间件（Bearer 验签）
 │   │   ├── utils/            # token、密码哈希（PBKDF2）、请求校验
 │   │   ├── errors.ts         # ApiError（业务异常，携带 HTTP 状态）
 │   │   ├── context.ts        # 每请求上下文 Ctx
 │   │   ├── route.ts          # 路由分发（先校验路径形状再鉴权）
 │   │   ├── response.ts       # 统一响应与 CORS
-│   │   └── index.ts          # Worker 入口（密钥守卫、错误收口、请求日志）
-│   └── wrangler.jsonc        # Worker / D1 配置
-└── front-end/                # Tauri + Vue 桌面客户端
-    ├── src/
-    │   ├── api/              # HTTP 封装（静默续签/超时）、tokenStore 与接口定义
-    │   ├── composables/      # useAuth / useBooks / useChapters / useConfirm / useToast
-    │   ├── views/            # LoginView / BookshelfView / EditorView
-    │   ├── components/       # BookCard / ChapterList / ChapterEditor / ToastHost
-    │   ├── config/           # API 地址等常量
-    │   └── types/            # TypeScript 类型
-    └── src-tauri/            # Tauri (Rust) 工程
+│   │   ├── index.ts          # 请求处理入口（密钥守卫、错误收口、请求日志）
+│   │   └── server.ts         # Node 监听：/api 反代到 handler、/health、静态文件与 SPA 回退
+├── front-end/                # Tauri + Vue 客户端
+│   ├── src/
+│   │   ├── api/              # HTTP 封装（静默续签/超时）、tokenStore 与接口定义
+│   │   ├── composables/      # useAuth / useBooks / useChapters / useConfirm / useToast
+│   │   ├── views/            # LoginView / BookshelfView / EditorView
+│   │   ├── components/       # BookCard / ChapterList / ChapterEditor / ToastHost
+│   │   ├── config/           # API 地址等常量
+│   │   └── types/            # TypeScript 类型
+│   └── src-tauri/            # Tauri (Rust) 工程
+└── mcp/                      # 供 AI 客户端调用的 MCP server（同一套自托管 API）
 ```
 
 ## 环境要求
 
-- [Node.js](https://nodejs.org/) 20.19+（前端构建）；后端测试需要 **22.6+**（`node:test` 直接跑 TS）
-- [Rust](https://www.rust-lang.org/tools/install)（构建 Tauri 客户端所需）
-- [Cloudflare 账号](https://dash.cloudflare.com/) 与 Wrangler 登录（部署后端所需）
+- [Docker](https://www.docker.com/)（含 Compose 插件）— 部署与本地联调
+- [Node.js](https://nodejs.org/) 24（后端开发/测试）；前端构建需 20.19+
+- [Rust](https://www.rust-lang.org/tools/install)（仅构建 Tauri 桌面安装包时需要）
+- [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)（可选，仅公网隧道需要；容器内已自带）
+- 一个可用的 MySQL 8 服务：本项目默认复用同级的 `mysql-server` 容器（`../mysql-server`），并在其中创建**专用数据库与专用账号**，不共用其他项目的库
+
+## 部署（本机 Docker）
+
+```bash
+# 0) 数据库容器要先跑起来
+../mysql-server/scripts/start.sh
+
+# 1) 一次性初始化：建库 writing_assistant + 专用账号 + 建表 + 生成 .env
+./scripts/db-init.sh
+
+# 2) 构建并启动（默认只监听 127.0.0.1:8787）
+docker compose up -d --build
+
+# 或者一步到位（先跑本地门禁再 build + up + 健康等待）
+./scripts/deploy.sh
+
+# 验证
+curl -s http://127.0.0.1:8787/health     # {"status":"ok","database":true}
+```
+
+打开 <http://127.0.0.1:8787> 即是网页版；API 在 `http://127.0.0.1:8787/api`。要让局域网其他设备访问，把 `.env` 里的 `APP_BIND_ADDR` 改成 `0.0.0.0` 后重新 `docker compose up -d`。
+
+数据库结构变更：改 `back-end/db/schema.mysql.sql`，再对目标库执行相应 `ALTER`（新库直接跑该文件）。
+
+### 公网访问（Cloudflare Tunnel，可选）
+
+不想开端口、也不想要 TLS 证书时，用隧道反向连接：容器里的 cloudflared 主动拨到 Cloudflare 边缘，公网地址回到本机 `app:8787`。当前实例：<https://writer.sloan.dpdns.org>。
+
+```bash
+# 一次性（可重复执行）：建隧道 → 绑 DNS → 私钥放进 cloudflared/credentials.json
+# → .env 写入 CF_CRED_FILE / TRUST_PROXY=1 / COMPOSE_PROFILES=tunnel
+./scripts/tunnel-init.sh
+
+docker compose up -d          # 隧道随主服务一起起（depends_on: app 健康之后）
+docker compose logs -f tunnel # 连接抖动时看这里
+```
+
+之后每次 `./scripts/deploy.sh` 或 `docker compose up -d --build` 都会自动带上隧道；不想再公网访问就 `cloudflared tunnel delete <id>`（私钥随隧道失效），或只把 `.env` 里的 `COMPOSE_PROFILES` 清空后重新 `up -d`。
+
+两点注意：
+
+- **`TRUST_PROXY=1` 与隧道是绑定的**。不开隧道却把 `APP_BIND_ADDR` 改成 `0.0.0.0`，局域网里任何设备都能伪造 `X-Forwarded-For`，绕过按 IP 的登录限速；`server.ts` 正是用这个头合成 `CF-Connecting-IP`。
+- **隧道容器跑在共享的 `mysql-server_default` 网络上**，因此它按 `writing-assistant:8787`（容器名，全局唯一）访问应用；这里故意不用 `app` 这个 compose 服务名，因为共享网络里别的项目若也有 `app` 服务会撞同一个 DNS 名。
+- 应用本身仍只发布在 `127.0.0.1:8787`，公网入口只有隧道这一条。
+
+AI 工具（`mcp/`）同样可以指向这个域名（`WRITER_API_BASE=https://writer.sloan.dpdns.org/api`），但跑在本机时填 `http://127.0.0.1:8787/api` 更稳：少一跳、不依赖公网 DNS，隧道容器挂了也不影响。地址规则见 `mcp/README.md`。
 
 ## 后端
 
@@ -66,46 +132,70 @@ WriterDemo/
 cd back-end
 npm install
 
-# 类型检查（自动重新生成 worker-configuration.d.ts）
+# 类型检查
 npm run typecheck
 
 # 单元测试（token 验签 / 密码哈希 / 请求校验）
 npm test
 
-# 本地执行数据库迁移
-npm run db:migrate:local
-
-# 启动本地开发服务器（wrangler dev）
+# 打成 dist/server.js 并前台运行（需先有 .env）
 npm run dev
 
-# 部署到 Cloudflare（先迁移再部署，见 deploy.ps1）
-npm run db:migrate:remote
-npm run deploy
+# 只构建
+npm run build
+
+# 生产启动（容器内用的就是这个）
+npm start
 ```
 
-### 环境变量（必须配置，否则所有接口返回 500）
+### 环境变量
 
-签名 token 需要两把**独立**密钥（长度 ≥ 32 字符，`openssl rand -base64 48` 生成）：
+`scripts/db-init.sh` 会生成仓库根的 `.env`（已存在则不覆盖，避免重置密钥把所有人踢下线）。容器通过 `env_file` 读取它。
 
-| 变量 | 用途 |
-| --- | --- |
-| `TOKEN_SECRET` | Access Token 签名密钥 |
-| `REFRESH_SECRET` | Refresh Token 签名密钥（与上者必须不同） |
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `DB_HOST` / `DB_PORT` | 是 | 数据库地址。容器内是 `mysql` / `3306`（compose 网络里的服务名）；宿主机直连用 `127.0.0.1` |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | 是 | 专用库名、专用账号与口令（权限只限该库） |
+| `TOKEN_SECRET` | 是 | Access Token 签名密钥，≥ 32 字符 |
+| `REFRESH_SECRET` | 是 | Refresh Token 签名密钥，≥ 32 字符且**必须与上者不同** |
+| `PORT` / `HOST` | 否 | 容器内监听端口（默认 `8787`）与地址（默认 `0.0.0.0`） |
+| `STATIC_DIR` | 否 | 静态目录，默认 `./public` |
+| `TRUST_PROXY` | 否 | 设为 `1` 时才信任 `X-Forwarded-For` 取客户端 IP（登录限速用）。走隧道时必须为 `1` |
+| `COMPOSE_PROFILES` | 否 | 置 `tunnel` 才启动 cloudflared 服务（compose 原生变量，写在 `.env` 即生效） |
+| `CF_CRED_FILE` | 开隧道时必填 | 隧道私钥路径，指向 gitignore 的 `cloudflared/credentials.json` |
+| `APP_BIND_ADDR` / `APP_PORT` | 否 | 仅 compose 用：宿主绑定地址与端口，默认 `127.0.0.1:8787` |
 
-- 本地开发：在 `back-end/.dev.vars` 写入两把密钥（该文件不入库）
-- 线上：`wrangler secret put TOKEN_SECRET` / `wrangler secret put REFRESH_SECRET`
+缺少任一项服务会直接启动失败（快速失败优于所有接口 500）。
 
 ### 数据库
 
-表结构见 `back-end/migrations/`：
+`back-end/db/schema.mysql.sql` 建 9 张表（InnoDB / utf8mb4）：
 
-- `0001_init.sql` — 用户表 `t_user` 与登录日志表 `t_login_log`（含示例账号）
-- `0002_book_chapter.sql` — 书籍表 `t_book` 与章节表 `t_chapter`
-- `0003_refresh_token.sql` — 刷新令牌会话（jti / 吊销 / 轮换）
-- `0004_login_attempt.sql` — 登录失败计数（限流）
-- `0005_chapter_stats.sql` — 章节字数冗余列（列表查询不再读正文）
+| 表 | 用途 |
+| --- | --- |
+| `t_user` | 账号（密码为 `pbkdf2$迭代数$盐$哈希`） |
+| `t_login_log` | Refresh Token 会话（jti / 吊销 / 轮换链） |
+| `t_login_attempt` | 登录失败计数（限流，短期数据） |
+| `t_book` / `t_volume` / `t_chapter` | 书 / 分卷 / 章节（章节冗余字数与 `version`） |
+| `t_chapter_history` | 保存前快照，每章最多 5 条 |
+| `t_entry` | 设定库条目（character / location / concept） |
+| `t_write_log` | 按天净增字数（写作热力图） |
 
-> ⚠️ 初始示例账号 `admin/123456`、`zhangsan/123456` 是**公开的演示弱口令**，仅用于本地体验；上线前请删除或修改（`DELETE FROM t_user WHERE username IN ('admin','zhangsan')`）。密码在首次登录时会自动从明文升级为 PBKDF2 哈希。
+几条与 SQLite 时代对齐的约定，改表时请保持：
+
+- 列名与 D1 完全一致，业务 SQL 两边通用；时间列是 **UTC 文本 / `DATETIME`**，服务端会话时区固定为 `+00:00`（不依赖容器时区）
+- 主键用 `BIGINT AUTO_INCREMENT`（对应 D1 的 8 字节 INTEGER）
+- `content` 这类 `TEXT` 列**必须带表达式默认值** `DEFAULT ('')`（MySQL 不允许 BLOB/TEXT 用普通 `DEFAULT ''`），否则 `createChapter` 只插 `book_id/title/sort_order` 会报 1364
+- 不再预置示例账号；`admin/123456`、`zhangsan/123456` 那类公开弱口令只存在于旧的 D1 演示库里，迁移脚本默认把它们连同其数据一并丢弃（`--keep-demo-accounts` 可保留）
+
+### 数据来源：从 Cloudflare D1 迁过来（已完成）
+
+本库的首批数据来自旧的 D1 部署，`scripts/d1-to-mysql.mjs` 记录了过程（脚本头部的三步命令仍可重复执行）：导出 → 离线转换 → `--apply` 写入并逐表逐字段回读比对。要点：
+
+- 导出文件是 SQLite 方言 SQL，正文里的换行被写成 `replace('…\n…', '\n', char(10))`；脚本把 dump 交给真实 SQLite 求值后再取值，而不是自己解析字符串，因此正文不会被转义规则坑掉
+- 主键原样保留（`book_id`/`chapter_id` 关系不变），导入后重设 `AUTO_INCREMENT`
+- 0001_init.sql 预置的演示账号（`admin`、`zhangsan`）连同它们的数据一起被丢弃（`--keep-demo-accounts` 可保留）
+- 2026-09-26 完成迁移：81 行，全部字段回读一致
 
 ### 接口约定
 
@@ -115,54 +205,79 @@ npm run deploy
 { "code": 200, "message": "ok", "data": {} }
 ```
 
+容器同源部署时 API 挂在 `/api` 前缀下（`server.ts` 去掉前缀后交给路由），下表路径均为**去掉 `/api` 后**的路径。
+
 | 方法 | 路径 | 说明 | 认证 |
 | --- | --- | --- | --- |
+| `GET` | `/health`（或 `/api/health`） | 存活 + 数据库连通性探测 | 否 |
 | `POST` | `/login` | 用户名密码登录，返回 token 对 | 否 |
 | `POST` | `/register` | 注册（密码 6-128 字符，自动登录） | 否 |
 | `POST` | `/refresh` | 用 Refresh Token 换新 token 对（轮换） | 否 |
 | `POST` | `/logout` | 吊销当前 Refresh Token 会话 | 否 |
 | `GET` | `/me` | 当前用户信息 | 是 |
-| `GET` | `/books` | 当前用户的书列表 | 是 |
-| `POST` | `/books` | 新建书 | 是 |
-| `PUT` | `/books/:id` | 重命名书 | 是 |
-| `DELETE` | `/books/:id` | 删除书（级联删除章节） | 是 |
-| `GET` | `/books/:bookId/chapters` | 某书的章节列表 | 是 |
-| `POST` | `/books/:bookId/chapters` | 在书下新建章节 | 是 |
-| `PUT` | `/books/:bookId/chapters` | 重排章节（body: `{ ids }`） | 是 |
+| `PUT` | `/me/password` | 修改密码（吊销该账号全部会话） | 是 |
+| `GET` / `POST` | `/books` | 书列表 / 新建书 | 是 |
+| `PUT` / `DELETE` | `/books/:id` | 重命名 / 删除书（级联删除章节） | 是 |
+| `GET` / `POST` / `PUT` | `/books/:bookId/chapters` | 章节列表 / 新建 / 重排（body: `{ ids }`） | 是 |
+| `GET` | `/books/:bookId/search?q=` | 全书关键字搜索（按章聚合命中数） | 是 |
+| `GET` | `/books/:bookId/outline` | 全书大纲（各章标题层级） | 是 |
+| `POST` | `/books/:bookId/replace` | 全书批量替换（body: `{ from, to }`） | 是 |
+| `GET` / `POST` | `/books/:bookId/volumes` | 分卷列表 / 新建 | 是 |
+| `GET` / `POST` / `PUT` | `/books/:bookId/entries` | 设定条目列表 / 新建 / 重排（query 或 body: `type`） | 是 |
+| `PUT` / `DELETE` | `/volumes/:id` | 重命名 / 删除分卷 | 是 |
 | `GET` | `/chapters/:id` | 章节详情（含正文） | 是 |
 | `PUT` | `/chapters/:id` | 保存章节（body 含 `baseVersion` 乐观锁） | 是 |
 | `DELETE` | `/chapters/:id` | 删除章节 | 是 |
+| `PUT` | `/chapters/:id/volume` | 移动章节到某卷（`volumeId: null` 取消分卷） | 是 |
+| `GET` | `/chapters/:id/history`、`/chapters/:id/history/:hid` | 历史版本列表 / 某一版内容 | 是 |
+| `GET` / `PUT` / `DELETE` | `/entries/:id` | 条目详情 / 更新（带 `baseVersion`）/ 删除 | 是 |
 
-`userId` 由中间件从 token 解析，不接受前端传入。除公开接口（login/register/refresh/logout）外，所有路径先校验形状（非法路径返回 404）再鉴权（返回 401）。
+`userId` 由中间件从 token 解析，不接受前端传入。除公开接口（login/register/refresh/logout/health）外，所有路径先校验形状（非法路径返回 404）再鉴权（返回 401）。
 
 ## 前端
 
-前端默认请求的 API 地址配置在 `front-end/src/config/index.ts`，请按需修改（本地开发通常指向 `wrangler dev` 输出的地址）。
+网页版与 API 同源，因此浏览器构建默认请求 `/api`；Tauri 桌面版没有同源可用，指向 `http://127.0.0.1:8787`。逻辑在 `front-end/src/config/index.ts`，可用 `VITE_API_BASE_URL` 覆盖。
 
-> ⚠️ 换 API 域名时需**同步**修改三处，漏改任何一处都会导致桌面端请求被静默拦截：`front-end/src/config/index.ts` 的 `API_BASE_URL`、`front-end/src-tauri/tauri.conf.json` 的 CSP `connect-src`、`front-end/src-tauri/capabilities/default.json`（如后续恢复 http 插件权限）。
+桌面版若要走公网隧道：构建时设 `VITE_API_BASE_URL=https://writer.sloan.dpdns.org/api`，同时把 `src-tauri/tauri.conf.json` 里 CSP 的 `connect-src` 从只放行 `127.0.0.1:8787` 改成也放行该域名，否则请求会被 webview 拦掉。
 
 ```bash
 cd front-end
 npm install
 
-# 浏览器中运行 Vite 开发服务器
-npm run dev
-
-# 以桌面应用形式运行（Tauri 开发模式）
-npm run tauri dev
-
-# 构建桌面安装包
-npm run tauri build
+npm run dev          # Vite 开发服务器；/api 代理到 127.0.0.1:8787（可用 VITE_DEV_API_TARGET 改）
+npm run build        # vue-tsc 类型检查 + 产物
+npm run tauri dev    # 桌面应用开发模式
+npm run tauri build  # 桌面安装包
 ```
+
+> ⚠️ 换 API 地址时需**同步**三处，漏改任何一处都会让桌面端请求被静默拦截：`VITE_API_BASE_URL`（或 `src/config/index.ts` 默认值）、`src-tauri/tauri.conf.json` 的 CSP `connect-src`、`src-tauri/capabilities/default.json`（如后续恢复 http 插件权限）。
+
+## 持续集成
+
+`.github/workflows/ci.yml` 一条流水线做三件事：后端 `typecheck` + 单测 + esbuild 打包、前端 `npm run build`（含 `vue-tsc`）、`docker build` 出镜像验证 Dockerfile 可用。**不推送镜像、不部署**——部署始终是宿主机上的 `docker compose up -d --build`。
 
 ## 安全设计（已加固项）
 
-- 密码：PBKDF2-SHA256（21 万次迭代）+ 每用户随机盐，登录恒时比对；防用户名枚举（账号不存在与密码错误返回同一消息）
-- 令牌：AT/RT 双密钥、`typ` 声明隔离（AT 不能当 RT 用）、RT 库内只存 SHA-256 哈希、刷新轮换 + jti 条件更新防并发重放、密钥长度守卫
+- 密码：PBKDF2-SHA256（21 万次迭代）+ 每用户随机盐，登录恒时比对；防用户名枚举（账号不存在与密码错误返回同一消息）。迭代次数写在每个哈希串里并按串校验，所以从 1 万上调到 21 万不影响存量账号（它们仍按自己的成本通过校验，改密时升档）
+- 令牌：AT/RT 双密钥、`typ` 声明隔离（AT 不能当 RT 用）、RT 库内只存 SHA-256 哈希、刷新轮换 + jti 条件更新防并发重放、启动时密钥长度守卫
 - 接口：全参数化 SQL、逐资源归属校验（403）、请求体/路径参数校验（400）、未知异常不向客户端泄露内部信息、结构化请求日志
+- 静态托管：路径拼接前规范化并限制在 `STATIC_DIR` 内，越界只回 SPA `index.html`；密钥只存在于 `.env`（`.dockerignore` 排除，不进镜像层）
 - 前端：请求超时（20s）、401 自动续签重试、登出/关窗前同步 flush、Tauri CSP 与最小权限（仅 `core:default`）
 - 多会话共存：登录/刷新各自独立会话（`t_login_log` 按 jti 隔离，互不吊销）；改密吊销该账号全部会话；写操作前置校验会话有效（401 防已注销会话继续写）
+- 网络暴露：容器端口只绑 `127.0.0.1`，不对局域网开放；对外只有 Cloudflare Tunnel 一条入向路径（连接器主动出网，不开任何监听端口，TLS 在边缘终结）。注意 `TRUST_PROXY=1` 时 `X-Forwarded-For` 可被直连者伪造，所以「改 `APP_BIND_ADDR=0.0.0.0` 暴露局域网」与「开隧道」二选一，别同时做
 
 ## 说明
 
-本项目为演示用途，登录限流、密码哈希等已做基础加固，但仍**请勿直接用于生产环境**（生产还需：正式限流策略、审计日志、HTTPS 证书管理等）。
+登录限流、密码哈希等已做基础加固，但项目仍不带 HTTPS 终结、正式限流与审计能力；若要公网开放，请在前置反代处理 TLS 与真实客户端 IP（并设置 `TRUST_PROXY=1`）。
+
+### 命名说明
+
+项目原名 `WriterDemo`，仓库与包名已统一为 `writing-assistant`。数据已于 2026-09-26 完整迁出，Cloudflare 上对应本项目的资源（Worker `api` 及其域名 `api.sloan.dpdns.org`、Pages 项目 `writer-demo-web` 及其域名 `sloan.dpdns.org`、D1 库 `writer-demo`）已全部删除，仓库里也不再有 `wrangler.jsonc`、`migrations/` 和 wrangler 依赖。只剩一处旧名：
+
+| 位置 | 标识 | 含义 |
+| --- | --- | --- |
+| `mcp/` 的凭证路径 | `~/.writer-mcp.json`、`WRITER_MCP_CONFIG` | 指向用户机器上已存在的凭证文件，改名等于要求所有人重新 `login` |
+
+迁移前的唯一备份是 `back-end/.d1-export/dump.sql`（已 gitignore，内含密码哈希），云端那份已随 `writer-demo` 一起删除；本地文件已确认导入正确（81 行逐字段比对通过），需要长期留存的请自行归档。
+
+MCP 的 npm 包已更名为 `writing-assistant-mcp`（原 `writer-demo-mcp` 停止发布）：老用户需 `npm install -g writing-assistant-mcp`、更新 AI 客户端里的配置，并**重新 `login`**——旧凭证里的地址指向已下线的 Worker，且新后端换了签名密钥。详见 `mcp/README.md`。

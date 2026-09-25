@@ -1,0 +1,21 @@
+# Keep the build context small: the image copies sources in per stage, and
+# every dependency is installed inside the build (never from the host).
+.git
+.github
+**/node_modules
+**/dist
+**/.wrangler
+**/.d1-export
+**/.dev.vars
+**/.env
+**/.env.*
+# Tunnel private key: compose bind-mounts it at runtime, it has no business in
+# the build context (the image never copies cloudflared/ anyway).
+cloudflared/credentials.json
+front-end/src-tauri/target
+front-end/src-tauri/gen
+docs
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore

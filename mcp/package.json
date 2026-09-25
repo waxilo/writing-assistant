@@ -1,8 +1,8 @@
 {
-  "name": "writer-demo-mcp",
-  "version": "0.1.2",
+  "name": "writing-assistant-mcp",
+  "version": "0.1.0",
   "type": "module",
-  "description": "WriterDemo 写作助手 MCP server：让 Claude Desktop / Cursor 等 AI 客户端读写章节正文与设定资料库（人物/地点/设定）",
+  "description": "写作助手 MCP server：让 Claude Desktop / Cursor 等 AI 客户端读写章节正文与设定资料库（人物/地点/设定）",
   "engines": {
     "node": ">=20"
   },
@@ -20,15 +20,15 @@
     "model-context-protocol",
     "writing",
     "novel",
-    "cloudflare",
+    "self-hosted",
     "writer"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/waxilo/WiterDemo.git"
+    "url": "git+https://github.com/waxilo/writing-assistant.git"
   },
   "bin": {
-    "writer-demo-mcp": "server.mjs"
+    "writing-assistant-mcp": "server.mjs"
   },
   "files": [
     "server.mjs",

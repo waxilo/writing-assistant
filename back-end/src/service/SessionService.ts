@@ -2,7 +2,7 @@
 // login and rotated on every refresh (old session revoked, new one inserted),
 // which enables logout and stolen-token replay detection.
 
-import { sha256Hex } from "../utils/token";
+import { REFRESH_TTL, sha256Hex } from "../utils/token";
 
 interface SessionRow {
   id: number;
@@ -11,10 +11,22 @@ interface SessionRow {
   revoked: number;
   /** Refresh token lifetime in ms (a duration, relative to `login_time`). */
   token_expire_ms: number;
-  /** Derived in SQL: `login_time + token_expire_ms`, as ms since epoch. */
-  expire_at_ms: number;
   /** 1 for AI-tool (MCP) sessions, exempt from the single-session kick. */
   is_mcp?: number;
+}
+
+/**
+ * `login_time` is UTC text ('YYYY-MM-DD HH:MM:SS' on both engines). Absolute
+ * expiry is derived here rather than in SQL because SQLite and MySQL expose
+ * completely different date arithmetic.
+ */
+function expireAtMs(loginTime: string, ttlMs: number): number {
+  return Date.parse(loginTime.replace(" ", "T") + "Z") + ttlMs;
+}
+
+/** `ms` since epoch as a UTC DATETIME literal, for binding against DATETIME columns. */
+function toSqlDateTime(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 }
 
 /** Register a new refresh-token session (stores only the token hash). */
@@ -37,8 +49,8 @@ export async function createSession(
 
 /**
  * Look up an active (not revoked, not expired) session by jti + owner.
- * `token_expire_ms` is a lifetime, so the absolute expiry is computed from
- * `login_time` (stored by SQLite as UTC) inside SQL.
+ * `token_expire_ms` is a lifetime, so the absolute expiry is derived from
+ * `login_time` here (SQLite and MySQL date arithmetic don't share a syntax).
  */
 export async function getActiveSession(
   env: Env,
@@ -46,16 +58,15 @@ export async function getActiveSession(
   jti: string
 ): Promise<SessionRow | null> {
   const row = await env.DB.prepare(
-    `select id, user_id, jti, revoked, token_expire_ms,
-            strftime('%s', login_time) * 1000 + token_expire_ms as expire_at_ms
+    `select id, user_id, jti, revoked, token_expire_ms, login_time
      from t_login_log where jti = ? and user_id = ?`
   )
     .bind(jti, userId)
-    .first<SessionRow>();
+    .first<SessionRow & { login_time: string }>();
 
   if (!row) return null;
   if (row.revoked === 1) return null;
-  if (row.expire_at_ms <= Date.now()) return null;
+  if (expireAtMs(row.login_time, row.token_expire_ms) <= Date.now()) return null;
   return row;
 }
 
@@ -123,12 +134,12 @@ export async function rotateSession(
     .run();
 
   // Opportunistic cleanup of expired/revoked rows (keeps the table bounded).
-  // token_expire_ms is a DURATION, so absolute expiry is derived in SQL.
+  // `token_expire_ms` is always REFRESH_TTL, so "login_time older than one
+  // full lifetime" is exactly "already expired" — and never deletes early.
   await env.DB.prepare(
-    `delete from t_login_log
-     where revoked = 1 and strftime('%s', login_time) * 1000 + token_expire_ms < ?`
+    `delete from t_login_log where revoked = 1 and login_time < ?`
   )
-    .bind(Date.now())
+    .bind(toSqlDateTime(Date.now() - REFRESH_TTL * 1000))
     .run();
 
   return true;

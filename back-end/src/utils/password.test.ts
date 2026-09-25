@@ -34,6 +34,35 @@ test("legacy plaintext is detected as unhashed", () => {
   assert.equal(isHashed("pbkdf2$210000$salt$hash"), true);
 });
 
+test("a hash written with another iteration count still verifies", async () => {
+  // Guards the raise-ITERATIONS path: the count lives in the stored string, so
+  // existing accounts must not start failing after the constant moves on.
+  const iterations = 500;
+  const salt = new Uint8Array(Array.from({ length: 16 }, (_, i) => i));
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations,
+      hash: "SHA-256",
+    },
+    await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode("old-password"),
+      "PBKDF2",
+      false,
+      ["deriveBits"]
+    ),
+    256
+  );
+  const b64 = (b: Uint8Array) =>
+    btoa(String.fromCharCode(...b));
+  const stored = `pbkdf2$${iterations}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
+
+  assert.equal(await verifyPassword("old-password", stored), true);
+  assert.equal(await verifyPassword("not-it", stored), false);
+});
+
 test("malformed stored hashes never verify", async () => {
   assert.equal(await verifyPassword("x", "pbkdf2$210000$salt"), false);
   assert.equal(await verifyPassword("x", ""), false);

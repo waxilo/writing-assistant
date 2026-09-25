@@ -28,6 +28,13 @@ function assertType(type: string): EntryType {
   return type as EntryType;
 }
 
+/** Re-read a row after a write (MySQL has no `returning`). */
+function findEntry(env: Env, entryId: number): Promise<EntryRow | null> {
+  return env.DB.prepare(`select * from t_entry where id = ?`)
+    .bind(entryId)
+    .first<EntryRow>();
+}
+
 /** List entries of a book, optionally filtered by type. */
 export async function listEntries(
   env: Env,
@@ -59,12 +66,20 @@ export async function createEntry(
   if (!book) throw new ApiError(403, "无权操作");
   const entryType = assertType(type);
 
-  const row = await env.DB.prepare(
-    `insert into t_entry (book_id, type, title, sort_order)
-     values (?, ?, ?, (select coalesce(max(sort_order), 0) + 1 from t_entry where book_id = ?))
-     returning *`
+  const nextOrder = await env.DB.prepare(
+    `select coalesce(max(sort_order), 0) + 1 as next from t_entry where book_id = ?`
   )
-    .bind(bookId, entryType, title?.trim() || "未命名条目", bookId)
+    .bind(bookId)
+    .first<{ next: number }>();
+
+  const inserted = await env.DB.prepare(
+    `insert into t_entry (book_id, type, title, sort_order) values (?, ?, ?, ?)`
+  )
+    .bind(bookId, entryType, title?.trim() || "未命名条目", nextOrder?.next ?? 1)
+    .run();
+
+  const row = await env.DB.prepare(`select * from t_entry where id = ?`)
+    .bind(inserted.meta.last_row_id)
     .first<EntryRow>();
   if (!row) throw new ApiError(500, "创建条目失败");
   return toEntry(row);
@@ -102,30 +117,33 @@ export async function updateEntry(
   if (baseVersion === undefined) {
     // 无版本（MCP/兼容调用）：直接覆盖，但同样递增 version，
     // 使持有旧快照的客户端（网页端）后续保存必然 409，不再覆盖本写入。
-    const row = await env.DB.prepare(
+    await env.DB.prepare(
       `update t_entry set title = ?, content = ?, type = ?, version = version + 1,
          update_time = CURRENT_TIMESTAMP
-       where id = ? returning *`
+       where id = ?`
     )
       .bind(nextTitle, nextContent, nextType, entryId)
-      .first<EntryRow>();
+      .run();
+
+    const row = await findEntry(env, entryId);
     if (!row) throw new ApiError(500, "更新条目失败");
     return toEntry(row);
   }
 
   // 乐观锁：写操作基于客户端加载的版本；版本不符 → 409 并回传最新状态，
   // 客户端据此恢复（不覆盖其他设备的写入）。
-  const row = await env.DB.prepare(
+  // MySQL 没有 `returning`，所以先看命中行数再回读整行。
+  const written = await env.DB.prepare(
     `update t_entry set title = ?, content = ?, type = ?, version = version + 1,
        update_time = CURRENT_TIMESTAMP
-     where id = ? and version = ? returning *`
+     where id = ? and version = ?`
   )
     .bind(nextTitle, nextContent, nextType, entryId, baseVersion)
-    .first<EntryRow>();
+    .run();
+
+  const row = written.meta.changes === 0 ? null : await findEntry(env, entryId);
   if (!row) {
-    const latest = await env.DB.prepare(`select * from t_entry where id = ?`)
-      .bind(entryId)
-      .first<EntryRow>();
+    const latest = await findEntry(env, entryId);
     throw new ApiError(409, "条目已在其他设备被修改", {
       version: latest?.version ?? 0,
       entry: latest ? toEntry(latest) : null,

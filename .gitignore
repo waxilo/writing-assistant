@@ -1,13 +1,16 @@
 node_modules/
-.wrangler/
-.dev.vars
-worker-configuration.d.ts
 dist/
 .vscode/
 .npm-cache/
 .DS_Store
 
-.dev.vars*
-!.dev.vars.example
 .env*
 !.env.example
+
+# D1 data dumps (schema + rows incl. password hashes) produced by
+# `wrangler d1 export` and by scripts/d1-to-mysql.mjs. Never commit these.
+back-end/.d1-export/
+
+# Cloudflare Tunnel private key installed by scripts/tunnel-init.sh.
+# cloudflared/config.yml stays tracked (id + ingress only, no secrets).
+cloudflared/credentials.json

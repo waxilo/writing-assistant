@@ -6,7 +6,11 @@ import { ApiError } from "./errors";
 /** Minimum secret length; HS256 is only as strong as its key entropy. */
 const MIN_SECRET_LENGTH = 32;
 
-export default {
+/**
+ * The request handler. Node calls it through src/server.ts (which adapts
+ * node:http to Web `Request`/`Response` and serves the built front-end).
+ */
+export const handler = {
   async fetch(request: Request, env: Env): Promise<Response> {
     // CORS preflight.
     if (request.method === "OPTIONS") {
@@ -14,7 +18,7 @@ export default {
     }
 
     // Fail fast with an obvious error instead of every endpoint 500-ing
-    // cryptically when secrets are missing/too short (wrangler secret put).
+    // cryptically when secrets are missing/too short (see .env / .env.example).
     if (
       !env.TOKEN_SECRET ||
       env.TOKEN_SECRET.length < MIN_SECRET_LENGTH ||
@@ -66,4 +70,4 @@ export default {
       }
     }
   },
-} satisfies ExportedHandler<Env>;
+};

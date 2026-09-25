@@ -7,7 +7,7 @@ import {
   createSession,
   revokeAllForUser,
 } from "./SessionService";
-import { ApiError } from "../errors";
+import { ApiError, isUniqueViolation } from "../errors";
 import {
   hashPassword,
   verifyPassword,
@@ -104,11 +104,12 @@ function normalizeUsername(value: unknown): string {
  * Precomputed PBKDF2 hash of a throwaway password, used when the username
  * does not exist: running the same expensive derivation as the real path
  * removes the response-time side channel that would let attackers enumerate
- * usernames. It never matches anything. Must be re-generated whenever
- * ITERATIONS in password.ts changes (kept in sync: 10k).
+ * usernames. It never matches anything. `verifyPassword` derives with the
+ * count embedded in the string, so raise this value together with ITERATIONS
+ * to keep the two paths burning the same CPU (currently in sync: 210k).
  */
 const DECOY_HASH =
-  "pbkdf2$10000$JmcFzlgBdIsb437MZspt2g==$JW856TX44hjGpnz84jcyFEFbr9F3DpV9t4IkwMwc+2c=";
+  "pbkdf2$210000$e+9z9hOa0nq5D56+vWvL6w==$4GJ+QybqEgaJFR6mnDFxaPGVwnFS/QhE9lzfy0w+wYU=";
 
 /** Issue an access + refresh token pair and register the refresh session. */
 export async function issueTokens(
@@ -224,12 +225,7 @@ export async function register(
       .bind(name, hashed, name)
       .run();
   } catch (error) {
-    if (
-      error instanceof Error &&
-      /UNIQUE constraint failed/i.test(error.message)
-    ) {
-      throw new ApiError(400, "该账号已存在");
-    }
+    if (isUniqueViolation(error)) throw new ApiError(400, "该账号已存在");
     throw error;
   }
 

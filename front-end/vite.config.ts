@@ -22,6 +22,15 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // `npm run dev` talks to the containerized API through this proxy, so the
+    // browser build can keep using the same-origin /api base it ships with.
+    proxy: {
+      "/api": {
+        // @ts-expect-error process is a nodejs global
+        target: process.env.VITE_DEV_API_TARGET ?? "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
+    },
     hmr: host
       ? {
           protocol: "ws",

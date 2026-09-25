@@ -9,17 +9,17 @@ import CodeBlock from "./CodeBlock.vue";
 const emit = defineEmits<{ (e: "close"): void }>();
 
 // 全局安装（网络受限环境推荐：npx 每次运行需访问 registry，全局安装只装一次）
-const INSTALL_CODE = "npm install -g writer-demo-mcp@latest";
-const LOGIN_CODE = "writer-demo-mcp login";
+const INSTALL_CODE = "npm install -g writing-assistant-mcp@latest";
+const LOGIN_CODE = "writing-assistant-mcp login";
 const CLAUDE_CONFIG = `{
   "mcpServers": {
-    "writer-demo": {
-      "command": "writer-demo-mcp",
+    "writing-assistant": {
+      "command": "writing-assistant-mcp",
       "args": []
     }
   }
 }`;
-const CURSOR_CONFIG = `command: writer-demo-mcp
+const CURSOR_CONFIG = `command: writing-assistant-mcp
 args: （留空）`;
 </script>
 

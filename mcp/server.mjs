@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// WriterDemo MCP server
+// 写作助手 MCP server
 // 让外部 AI（Claude Desktop / Cursor / 其他 MCP 客户端）读写写作项目的
-// 章节正文与设定资料库。通过用户账号凭证（~/.writer-mcp.json）调用现有
-// Cloudflare API，access token 过期时自动用 refresh token 续期。
+// 章节正文与设定资料库。通过用户账号凭证（~/.writer-mcp.json）调用自托管的
+// 写作助手 API，access token 过期时自动用 refresh token 续期。
 //
 // 运行：
-//   writer-demo-mcp           启动 MCP server（stdio 传输，由客户端拉起）
-//   writer-demo-mcp login     交互登录并保存凭证
+//   writing-assistant-mcp           启动 MCP server（stdio 传输，由客户端拉起）
+//   writing-assistant-mcp login     交互登录并保存凭证
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,9 +14,23 @@ import { join, dirname } from "node:path";
 
 const CONFIG_PATH =
   process.env.WRITER_MCP_CONFIG || join(homedir(), ".writer-mcp.json");
-const DEFAULT_API_BASE = "https://api.sloan.dpdns.org";
+const DEFAULT_API_BASE = "http://127.0.0.1:8787/api";
+
+/**
+ * The self-hosted container mounts the API under `/api`; for GET requests every
+ * other path is treated as a front-end route and answered with `index.html`
+ * (see `isApiRequest` in back-end/src/server.ts). A base without the suffix
+ * would therefore fail loudly on writes but silently return HTML on reads, so
+ * normalise it here instead — legacy credential files predate the prefix.
+ */
+function withApiSuffix(base, { warn = false } = {}) {
+  const trimmed = String(base || DEFAULT_API_BASE).replace(/\/+$/, "");
+  if (trimmed.endsWith("/api")) return trimmed;
+  if (warn) console.error(`⚠️ API 地址缺少 /api 后缀，已按 ${trimmed}/api 访问`);
+  return `${trimmed}/api`;
+}
 /** 发布到 npm 的当前版本（发布时同步更新）。 */
-const VERSION = "0.1.2";
+const VERSION = "0.1.0";
 
 // --- `login` subcommand -------------------------------------------------------
 
@@ -74,7 +88,7 @@ async function runLogin() {
     process.exit(1);
   }
 
-  const apiBase = process.env.WRITER_API_BASE || DEFAULT_API_BASE;
+  const apiBase = withApiSuffix(process.env.WRITER_API_BASE, { warn: true });
   const res = await fetch(`${apiBase}/login`, {
     method: "POST",
     headers: {
@@ -97,7 +111,7 @@ async function runLogin() {
   };
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
-  console.log(`✅ 凭证已保存到 ${CONFIG_PATH}（access token 会自动续期）`);
+  console.log(`✅ 已登录 ${apiBase}，凭证保存到 ${CONFIG_PATH}（access token 自动续期）`);
   process.exit(0);
 }
 
@@ -111,14 +125,14 @@ if (process.argv[2] === "login") {
  */
 async function checkForUpdate() {
   try {
-    const res = await fetch("https://registry.npmjs.org/writer-demo-mcp/latest", {
+    const res = await fetch("https://registry.npmjs.org/writing-assistant-mcp/latest", {
       signal: AbortSignal.timeout(5000),
     });
     const json = await res.json();
     if (json.version && json.version !== VERSION) {
       console.error(
-        `[writer-demo-mcp] 发现新版本 v${json.version}（当前 v${VERSION}）。` +
-          `更新：npm install -g writer-demo-mcp@latest；或改用 npx -y writer-demo-mcp 自动获取最新。`
+        `[writing-assistant-mcp] 发现新版本 v${json.version}（当前 v${VERSION}）。` +
+          `更新：npm install -g writing-assistant-mcp@latest；或改用 npx -y writing-assistant-mcp 自动获取最新。`
       );
     }
   } catch {
@@ -145,7 +159,7 @@ function loadConfig() {
     config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
     throw new Error(
-      `未找到凭证 ${CONFIG_PATH}。请先运行：writer-demo-mcp login（输入账号密码登录）`
+      `未找到凭证 ${CONFIG_PATH}。请先运行：writing-assistant-mcp login（输入账号密码登录）`
     );
   }
 }
@@ -156,7 +170,7 @@ function saveConfig() {
 }
 
 async function refreshTokens() {
-  const res = await fetch(`${config.apiBase ?? DEFAULT_API_BASE}/refresh`, {
+  const res = await fetch(`${withApiSuffix(config.apiBase)}/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken: config.refreshToken }),
@@ -164,7 +178,7 @@ async function refreshTokens() {
   });
   const json = await res.json().catch(() => null);
   if (!json || json.code !== 200 || !json.data) {
-    throw new Error("登录已过期，请重新运行 writer-demo-mcp login");
+    throw new Error("登录已过期，请重新运行 writing-assistant-mcp login");
   }
   config.accessToken = json.data.accessToken;
   config.refreshToken = json.data.refreshToken;
@@ -173,7 +187,7 @@ async function refreshTokens() {
 }
 
 /**
- * 调用 WriterDemo API。自动续期 + 401 后重试一次。
+ * 调用写作助手 API。自动续期 + 401 后重试一次。
  */
 async function api(path, { method = "GET", body } = {}) {
   if (!config) loadConfig();
@@ -186,7 +200,7 @@ async function api(path, { method = "GET", body } = {}) {
   }
 
   const request = async (token) => {
-    const res = await fetch(`${config.apiBase ?? DEFAULT_API_BASE}${path}`, {
+    const res = await fetch(`${withApiSuffix(config.apiBase)}${path}`, {
       method,
       headers: {
         "Content-Type": "application/json",
@@ -245,8 +259,8 @@ async function saveChapter(chapterId, patch) {
 // --- MCP server & tools -------------------------------------------------------
 
 const server = new McpServer({
-  name: "writer-demo",
-  version: "0.1.0",
+  name: "writing-assistant",
+  version: VERSION,
   instructions:
     "写作助手数据服务。可列出书籍与章节、读写章节正文、管理设定资料库" +
     "（人物/地点/设定）、全书搜索。修改正文或设定后，写作应用的网页端" +
