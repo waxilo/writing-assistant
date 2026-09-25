@@ -1,0 +1,32 @@
+/**
+ * 全局设计系统
+ * 登录页、书架、写作页、弹窗共用同一套设计变量。
+ * 风格：极简 · 温暖 · 安静 · 高级 · 专注创作。
+ */
+:root {
+  /* ---- 颜色 ---- */
+  --bg-color: #f5f3ee; /* 页面暖底 */
+  --paper-color: #fffdf8; /* 卡片 / 纸张表面 */
+  --text-color: #222; /* 主文字 */
+  --secondary-color: #888; /* 次要文字 */
+  --muted-color: #aaa; /* 更弱的辅助文字 */
+  --border-color: #ddd; /* 分隔线 / 输入下划线默认 */
+  --border-strong: #888; /* 输入下划线 focus */
+
+  /* 主操作色：暖灰黑，替代亮蓝 */
+  --accent-color: #222;
+  --accent-hover: #333;
+
+  /* 语气色（弹窗等复用） */
+  --danger-color: #d96a63;
+  --danger-hover: #c95a54;
+
+  /* ---- 圆角 ---- */
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+
+  /* ---- 阴影 ---- */
+  --shadow-card: 0 20px 60px rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
