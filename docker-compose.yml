@@ -17,21 +17,28 @@ services:
     container_name: writing-assistant
     restart: unless-stopped
     env_file: .env
+    environment:
+      # 应用监听端口。约定：容器内一律 80（网关转发用的就是这个号）。
+      - PORT=80
+    # 容器以非 root 的 `node` 用户跑，默认绑不了 1024 以下的特权端口。这个 sysctl 是
+    # 网络命名空间级、只作用于本容器，把「非特权端口起点」降到 80，不引入常驻特权。
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=80
     # Only reachable from this machine unless APP_BIND_ADDR says otherwise.
-    # Only 8787 is published: the host's port 80 belongs to ../gw, which is what
-    # actually answers this machine's `http://writer.sloan.dpdns.org`. A second
-    # mapping here would (a) be impossible to publish twice by Docker and (b) let
-    # a local URL bypass the gateway and hit this container directly, hiding the
-    # real path. The Tauri client and mcp/ both point at 8787, so that one stays.
+    # Container listens on 80; the host publishes 7001 (loopback) purely as a local
+    # debug entry. The public host's 80/443 belong to ../gw, which is what actually
+    # answers `writer.sloan.dpdns.org`. The gateway forwards to `writing-assistant:80`
+    # over gw_default, not through this mapping. The Tauri client and mcp/ now talk to
+    # the public domain (via gw) instead of a fixed local port, so nothing pins 8787.
     ports:
-      - "${APP_BIND_ADDR:-127.0.0.1}:${APP_PORT:-8787}:8787"
+      - "${APP_BIND_ADDR:-127.0.0.1}:${APP_PORT:-7001}:80"
     healthcheck:
       test:
         [
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "fetch('http://127.0.0.1:80/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
@@ -42,7 +49,7 @@ services:
       # External so this project never owns (or accidentally removes) it.
       - mysql-server_default
       # The shared public gateway (../gw); lets its nginx reach this container
-      # as `writing-assistant:8787`. External for the same reason.
+      # as `writing-assistant:80`. External for the same reason.
       - gw_default
 
 networks:

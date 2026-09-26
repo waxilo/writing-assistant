@@ -14,7 +14,7 @@ import { join, dirname } from "node:path";
 
 const CONFIG_PATH =
   process.env.WRITER_MCP_CONFIG || join(homedir(), ".writer-mcp.json");
-const DEFAULT_API_BASE = "http://127.0.0.1:8787/api";
+const DEFAULT_API_BASE = "https://writer.sloan.dpdns.org/api";
 
 /**
  * The self-hosted container mounts the API under `/api`; for GET requests every

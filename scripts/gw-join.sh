@@ -23,7 +23,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PUBLIC_HOSTNAME="${1:-writer.sloan.dpdns.org}"
-CONTAINER_TARGET="writing-assistant:8787"   # 必须是容器名：网关容器里的 127.0.0.1 是它自己
+CONTAINER_TARGET="writing-assistant:80"   # 必须是容器名：网关容器里的 127.0.0.1 是它自己
 GW_DIR="${GW_DIR:-$ROOT_DIR/../gw}"
 NETWORK=gw_default
 

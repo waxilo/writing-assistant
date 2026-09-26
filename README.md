@@ -88,17 +88,17 @@ writing-assistant/
 # 1) 一次性初始化：建库 writing_assistant + 专用账号 + 建表 + 生成 .env
 ./scripts/db-init.sh
 
-# 2) 构建并启动（默认只监听 127.0.0.1:8787）
+# 2) 构建并启动（容器内监听 80，宿主发布 127.0.0.1:7001）
 docker compose up -d --build
 
 # 或者一步到位（先跑本地门禁再 build + up + 健康等待）
 ./scripts/deploy.sh
 
 # 验证
-curl -s http://127.0.0.1:8787/health     # {"status":"ok","database":true}
+curl -s http://127.0.0.1:7001/health     # {"status":"ok","database":true}
 ```
 
-打开 <http://127.0.0.1:8787> 即是网页版；API 在 `http://127.0.0.1:8787/api`。要让局域网其他设备访问，把 `.env` 里的 `APP_BIND_ADDR` 改成 `0.0.0.0` 后重新 `docker compose up -d`。
+打开 <http://127.0.0.1:7001> 即是网页版；API 在 `http://127.0.0.1:7001/api`。要让局域网其他设备访问，把 `.env` 里的 `APP_BIND_ADDR` 改成 `0.0.0.0` 后重新 `docker compose up -d`。
 
 数据库结构变更：改 `back-end/db/schema.mysql.sql`，再对目标库执行相应 `ALTER`（新库直接跑该文件）。
 
@@ -129,14 +129,14 @@ docker logs -f gw             # 公网 530 / 502 时看这里
 注意点：
 
 - **`TRUST_PROXY=1` 与隧道是绑定的**。不开隧道却把 `APP_BIND_ADDR` 改成 `0.0.0.0`，局域网里任何设备都能伪造 `X-Forwarded-For`，绕过按 IP 的登录限速；`server.ts` 正是用这个头合成 `CF-Connecting-IP`。
-- **vhost 里只能写容器名**（`writing-assistant:8787`），不能写 `127.0.0.1`——那是网关容器自己的回环。也故意不用 `app` 这个 compose 服务名，共享网络里别的项目若也有 `app` 会撞同一个 DNS 名。
+- **vhost 里只能写容器名**（`writing-assistant:80`），不能写 `127.0.0.1`——那是网关容器自己的回环。也故意不用 `app` 这个 compose 服务名，共享网络里别的项目若也有 `app` 会撞同一个 DNS 名。
 - **上传上限两端要对齐**：网关的 `client_max_body_size 64m`（`../gw/conf.d/writer.conf`）对应 `server.ts` 的 `MAX_BODY_BYTES = 64 MiB`，改一边就得改另一边，否则应用还没看到请求体就被 nginx 413。
-- **应用只发布在 `127.0.0.1`**（`8787` 给桌面版和 mcp，`80` 是本机免端口入口，只服务 http），公网入口只有网关这一条。
+- **应用只发布在 `127.0.0.1:7001`**（容器内监听 `80`），那只是本机直连调试的入口；桌面版与 mcp 都改走公网域名 `writer.sloan.dpdns.org`（经网关），公网入口只有网关这一条。
 - 传输协议在 `../gw/cloudflared/config.yml` 固定为 `protocol: http2`：QUIC/UDP 7844 走本机代理时曾把 4 条连接同时打挂，连接器随之退出、公网 530 约两分钟。
 
 撤销公网访问：删掉 `../gw/conf.d/writer.conf` 并 `docker exec gw nginx -s reload`（未登记的 Host 会被网关直接 404）；要连整个 zone 的入口一起撤，就删 `gw` 隧道（私钥随隧道作废）。
 
-AI 工具（`mcp/`）同样可以指向这个域名（`WRITER_API_BASE=https://writer.sloan.dpdns.org/api`），但跑在本机时填 `http://127.0.0.1:8787/api` 更稳：少一跳、不依赖公网 DNS，隧道容器挂了也不影响。地址规则见 `mcp/README.md`。
+AI 工具（`mcp/`）默认就走公网域名 `https://writer.sloan.dpdns.org/api`（见 `mcp/server.mjs` 的 `DEFAULT_API_BASE`），可用 `WRITER_API_BASE` 覆盖。地址规则见 `mcp/README.md`。
 
 ## 后端
 
@@ -170,10 +170,10 @@ npm start
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` | 是 | 专用库名、专用账号与口令（权限只限该库） |
 | `TOKEN_SECRET` | 是 | Access Token 签名密钥，≥ 32 字符 |
 | `REFRESH_SECRET` | 是 | Refresh Token 签名密钥，≥ 32 字符且**必须与上者不同** |
-| `PORT` / `HOST` | 否 | 容器内监听端口（默认 `8787`）与地址（默认 `0.0.0.0`） |
+| `PORT` / `HOST` | 否 | 容器内监听端口（compose 里设 `80`，源码兜底 `8787`）与地址（默认 `0.0.0.0`） |
 | `STATIC_DIR` | 否 | 静态目录，默认 `./public` |
 | `TRUST_PROXY` | 否 | 设为 `1` 时才信任 `X-Forwarded-For` 取客户端 IP（登录限速用）。走公网入口时必须为 `1`，`gw-join.sh` 会写入 |
-| `APP_BIND_ADDR` / `APP_PORT` | 否 | 仅 compose 用：宿主绑定地址与端口，默认 `127.0.0.1:8787`；compose 另固定挂一个 `:80` 供本地域名映射用 |
+| `APP_BIND_ADDR` / `APP_PORT` | 否 | 仅 compose 用：宿主绑定地址与端口，默认 `127.0.0.1:7001`（容器内监听 `80`，宿主 `80/443` 归 gw） |
 
 缺少任一项服务会直接启动失败（快速失败优于所有接口 500）。
 
@@ -246,15 +246,15 @@ npm start
 
 ## 前端
 
-网页版与 API 同源，因此浏览器构建默认请求 `/api`；Tauri 桌面版没有同源可用，指向 `http://127.0.0.1:8787`。逻辑在 `front-end/src/config/index.ts`，可用 `VITE_API_BASE_URL` 覆盖。
+网页版与 API 同源，因此浏览器构建默认请求 `/api`；Tauri 桌面版没有同源可用，指向公网域名 `https://writer.sloan.dpdns.org`（经网关），不再钉死本机端口。逻辑在 `front-end/src/config/index.ts`，可用 `VITE_API_BASE_URL` 覆盖。
 
-桌面版若要走公网隧道：构建时设 `VITE_API_BASE_URL=https://writer.sloan.dpdns.org/api`，同时把 `src-tauri/tauri.conf.json` 里 CSP 的 `connect-src` 从只放行 `127.0.0.1:8787` 改成也放行该域名，否则请求会被 webview 拦掉。
+桌面版走的是公网域名，`src-tauri/tauri.conf.json` 的 CSP `connect-src` 已放行 `https://writer.sloan.dpdns.org`；若换成别的地址（LAN 直连等），记得同步把那个 origin 加进 `connect-src`，否则请求会被 webview 拦掉。改完需重新构建桌面端才生效。
 
 ```bash
 cd front-end
 npm install
 
-npm run dev          # Vite 开发服务器；/api 代理到 127.0.0.1:8787（可用 VITE_DEV_API_TARGET 改）
+npm run dev          # Vite 开发服务器；/api 代理到 127.0.0.1:7001（可用 VITE_DEV_API_TARGET 改）
 npm run build        # vue-tsc 类型检查 + 产物
 npm run tauri dev    # 桌面应用开发模式
 npm run tauri build  # 桌面安装包

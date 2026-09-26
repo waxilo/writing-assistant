@@ -50,7 +50,7 @@ DB_PASSWORD=$(password 24)
 TOKEN_SECRET=$(password 48)
 REFRESH_SECRET=$(password 48)
 APP_BIND_ADDR=127.0.0.1
-APP_PORT=8787
+APP_PORT=7001
 TRUST_PROXY=0
 EOF
   chmod 600 "$ROOT_DIR/.env"
@@ -93,7 +93,7 @@ cat <<'EOF'
 
 下一步：
   docker compose up -d --build        # 构建并启动（前端 + API 同容器）
-  open http://127.0.0.1:8787          # 注册第一个账号
+  open http://127.0.0.1:7001          # 注册第一个账号
 
 .env 里已是随机强密码，无需手动改动。
 EOF

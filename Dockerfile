@@ -35,5 +35,5 @@ COPY --from=api --chown=node:node /build/dist ./dist
 COPY --from=web --chown=node:node /build/dist ./public
 
 USER node
-EXPOSE 8787
+EXPOSE 80
 CMD ["node", "dist/server.js"]

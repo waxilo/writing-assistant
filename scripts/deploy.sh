@@ -57,7 +57,7 @@ docker compose ps
 bind=$(sed -n 's/^APP_BIND_ADDR=//p' .env | head -1)
 port=$(sed -n 's/^APP_PORT=//p' .env | head -1)
 echo ""
-echo "✅ 部署完成： http://${bind:-127.0.0.1}:${port:-8787}   （健康检查：${status}）"
+echo "✅ 部署完成： http://${bind:-127.0.0.1}:${port:-7001}   （健康检查：${status}）"
 
 # 公网入口由共享的 ../gw 网关提供：它有本域名的 nginx vhost 才算接入。
 if [ -f ../gw/conf.d/writer.conf ]; then
