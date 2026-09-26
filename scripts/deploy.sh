@@ -26,6 +26,11 @@ docker network inspect mysql-server_default >/dev/null 2>&1 || {
   echo "❌ 网络 mysql-server_default 不存在，先启动数据库：../mysql-server/scripts/start.sh" >&2
   exit 1
 }
+# Only needed for public access; `docker compose up` fails without it, so say so early.
+docker network inspect gw_default >/dev/null 2>&1 || {
+  echo "❌ 网络 gw_default 不存在，先启动共享公网入口：../gw（./scripts/gw-join.sh 可一并接好）" >&2
+  exit 1
+}
 
 if [ "$SKIP_CHECKS" -eq 0 ]; then
   echo "==> 后端 typecheck + 单测"
@@ -54,10 +59,10 @@ port=$(sed -n 's/^APP_PORT=//p' .env | head -1)
 echo ""
 echo "✅ 部署完成： http://${bind:-127.0.0.1}:${port:-8787}   （健康检查：${status}）"
 
-if [ "$(sed -n 's/^COMPOSE_PROFILES=//p' .env | head -1)" = "tunnel" ]; then
-  # The connector registers asynchronously, so a 530 right here is normal for a
-  # couple of seconds; a real failure shows up in `docker compose logs tunnel`.
-  echo "   公网入口： https://writer.sloan.dpdns.org   （隧道：$(docker inspect -f '{{.State.Status}}' writing-assistant-tunnel 2>/dev/null || echo 未启动)）"
+# 公网入口由共享的 ../gw 网关提供：它有本域名的 nginx vhost 才算接入。
+if [ -f ../gw/conf.d/writer.conf ]; then
+  gw_state=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' gw 2>/dev/null || echo 未启动)
+  echo "   公网入口： https://writer.sloan.dpdns.org   （网关 gw：${gw_state}）"
 fi
 
 [ "$SHOW_LOGS" -eq 1 ] && exec docker compose logs -f

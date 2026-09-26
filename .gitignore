@@ -11,6 +11,3 @@ dist/
 # `wrangler d1 export` and by scripts/d1-to-mysql.mjs. Never commit these.
 back-end/.d1-export/
 
-# Cloudflare Tunnel private key installed by scripts/tunnel-init.sh.
-# cloudflared/config.yml stays tracked (id + ingress only, no secrets).
-cloudflared/credentials.json

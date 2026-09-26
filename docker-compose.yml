@@ -5,9 +5,9 @@
 #   ./scripts/db-init.sh               # one-off: create the dedicated DB + user
 #   docker compose up -d --build
 #
-# Optional public entry: the `tunnel` service below runs cloudflared, which is
-# the only way the app reaches the internet (the app itself still publishes on
-# 127.0.0.1 only). Needs one-time setup, see cloudflared/config.yml.
+# Optional public entry: the shared `gw` gateway in ../gw (cloudflared + nginx)
+# reaches this container by name over the shared gw_default network. The app
+# itself opens no inbound port. Setup: ./scripts/gw-join.sh
 services:
   app:
     build:
@@ -18,6 +18,11 @@ services:
     restart: unless-stopped
     env_file: .env
     # Only reachable from this machine unless APP_BIND_ADDR says otherwise.
+    # Only 8787 is published: the host's port 80 belongs to ../gw, which is what
+    # actually answers this machine's `http://writer.sloan.dpdns.org`. A second
+    # mapping here would (a) be impossible to publish twice by Docker and (b) let
+    # a local URL bypass the gateway and hit this container directly, hiding the
+    # real path. The Tauri client and mcp/ both point at 8787, so that one stays.
     ports:
       - "${APP_BIND_ADDR:-127.0.0.1}:${APP_PORT:-8787}:8787"
     healthcheck:
@@ -36,33 +41,12 @@ services:
       # The shared MySQL server's network; the database is reached as `mysql`.
       # External so this project never owns (or accidentally removes) it.
       - mysql-server_default
-
-  # Public entry point (Cloudflare Tunnel): writer.sloan.dpdns.org -> app:8787.
-  # Reverse direction is impossible — the connector dials out to Cloudflare, so
-  # no inbound port is opened and the app keeps its 127.0.0.1-only publishing.
-  #
-  # Behind a profile so a fresh clone without tunnel setup still runs plain
-  # `docker compose up -d`; ./scripts/tunnel-init.sh puts COMPOSE_PROFILES=tunnel
-  # into .env, which turns it on for every later compose command.
-  tunnel:
-    profiles: ["tunnel"]
-    image: cloudflare/cloudflared:2026.9.1
-    container_name: writing-assistant-tunnel
-    restart: unless-stopped
-    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
-    volumes:
-      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
-      # Host path to the tunnel credentials, set by ./scripts/tunnel-init.sh.
-      # `${VAR:?}` fails the compose run instead of starting a half-configured
-      # tunnel when the line is missing.
-      - "${CF_CRED_FILE:?先执行 ./scripts/tunnel-init.sh 生成隧道凭证}:/etc/cloudflared/credentials.json:ro"
-    depends_on:
-      app:
-        # Otherwise cloudflared starts first and answers 530 until the app is up.
-        condition: service_healthy
-    networks:
-      - mysql-server_default
+      # The shared public gateway (../gw); lets its nginx reach this container
+      # as `writing-assistant:8787`. External for the same reason.
+      - gw_default
 
 networks:
   mysql-server_default:
+    external: true
+  gw_default:
     external: true

@@ -38,13 +38,12 @@
 ```
 writing-assistant/
 ├── Dockerfile                # web 构建 + api 构建 → 单一运行镜像
-├── docker-compose.yml        # 加入 mysql-server 的网络，端口默认只绑 127.0.0.1
-├── cloudflared/config.yml    # 公网隧道的 ingress（域名 → app:8787），不含私钥
+├── docker-compose.yml        # 挂进 mysql-server 与 gw_default 两个共享网络，端口默认只绑 127.0.0.1
 ├── .env                      # 运行时配置（不入库；由 db-init.sh 生成）
 ├── scripts/
 │   ├── db-init.sh            # 一次性：建库 + 专用账号 + 建表 + 生成 .env
 │   ├── deploy.sh             # 日常部署：本地门禁 → 构建镜像 → 起容器 → 健康检查
-│   ├── tunnel-init.sh        # 可选：一次性开通 Cloudflare Tunnel 公网入口
+│   ├── gw-join.sh            # 可选：把本项目接入共享公网入口 ../gw
 │   └── d1-to-mysql.mjs       # 历史归档：把旧 D1 数据导入 MySQL（含逐行回读校验）
 ├── back-end/                 # Node API
 │   ├── db/schema.mysql.sql   # 全部建表语句（合并自原 D1 迁移）
@@ -77,7 +76,7 @@ writing-assistant/
 - [Docker](https://www.docker.com/)（含 Compose 插件）— 部署与本地联调
 - [Node.js](https://nodejs.org/) 24（后端开发/测试）；前端构建需 20.19+
 - [Rust](https://www.rust-lang.org/tools/install)（仅构建 Tauri 桌面安装包时需要）
-- [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)（可选，仅公网隧道需要；容器内已自带）
+- [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)（可选，只有 ../gw 的一次性初始化要在宿主机上跑；网关容器内已自带）
 - 一个可用的 MySQL 8 服务：本项目默认复用同级的 `mysql-server` 容器（`../mysql-server`），并在其中创建**专用数据库与专用账号**，不共用其他项目的库
 
 ## 部署（本机 Docker）
@@ -103,26 +102,39 @@ curl -s http://127.0.0.1:8787/health     # {"status":"ok","database":true}
 
 数据库结构变更：改 `back-end/db/schema.mysql.sql`，再对目标库执行相应 `ALTER`（新库直接跑该文件）。
 
-### 公网访问（Cloudflare Tunnel，可选）
+### 公网访问（共享网关 gw，可选）
 
-不想开端口、也不想要 TLS 证书时，用隧道反向连接：容器里的 cloudflared 主动拨到 Cloudflare 边缘，公网地址回到本机 `app:8787`。当前实例：<https://writer.sloan.dpdns.org>。
+当前实例：<https://writer.sloan.dpdns.org>。
+
+入口**不在本项目里**，而在同级的共享项目 [`../gw`](../gw/README.md)：一个容器里同时跑
+cloudflared（拨到 Cloudflare 边缘，本机不开任何入站端口、TLS 在边缘终结）和 nginx（按 `Host`
+头分发给 `gw_default` 网络上的应用容器）。和 `../mysql-server` 是同一套思路——应用只挂网络，
+不各自养隧道。
+
+隧道带的是 `*.sloan.dpdns.org` **通配**记录，所以新增域名只在网关本地加一个 nginx vhost，
+Cloudflare 侧零操作（不需要 `cloudflared tunnel route dns`，也不需要改 ingress）。
 
 ```bash
-# 一次性（可重复执行）：建隧道 → 绑 DNS → 私钥放进 cloudflared/credentials.json
-# → .env 写入 CF_CRED_FILE / TRUST_PROXY=1 / COMPOSE_PROFILES=tunnel
-./scripts/tunnel-init.sh
+# 每台机器一次：建隧道 + 通配 DNS 记录 + 共享网络，然后起网关容器
+cd ../gw && ./scripts/gw-init.sh && docker compose up -d && cd -
 
-docker compose up -d          # 隧道随主服务一起起（depends_on: app 健康之后）
-docker compose logs -f tunnel # 连接抖动时看这里
+# 本项目一次（可重复执行）：挂上 gw_default + .env 置 TRUST_PROXY=1 + 生成 vhost
+./scripts/gw-join.sh
+
+docker logs -f gw             # 公网 530 / 502 时看这里
 ```
 
-之后每次 `./scripts/deploy.sh` 或 `docker compose up -d --build` 都会自动带上隧道；不想再公网访问就 `cloudflared tunnel delete <id>`（私钥随隧道失效），或只把 `.env` 里的 `COMPOSE_PROFILES` 清空后重新 `up -d`。
+之后 `./scripts/deploy.sh` 和 `docker compose up -d --build` 都不必再关心入口。
 
-两点注意：
+注意点：
 
 - **`TRUST_PROXY=1` 与隧道是绑定的**。不开隧道却把 `APP_BIND_ADDR` 改成 `0.0.0.0`，局域网里任何设备都能伪造 `X-Forwarded-For`，绕过按 IP 的登录限速；`server.ts` 正是用这个头合成 `CF-Connecting-IP`。
-- **隧道容器跑在共享的 `mysql-server_default` 网络上**，因此它按 `writing-assistant:8787`（容器名，全局唯一）访问应用；这里故意不用 `app` 这个 compose 服务名，因为共享网络里别的项目若也有 `app` 服务会撞同一个 DNS 名。
-- 应用本身仍只发布在 `127.0.0.1:8787`，公网入口只有隧道这一条。
+- **vhost 里只能写容器名**（`writing-assistant:8787`），不能写 `127.0.0.1`——那是网关容器自己的回环。也故意不用 `app` 这个 compose 服务名，共享网络里别的项目若也有 `app` 会撞同一个 DNS 名。
+- **上传上限两端要对齐**：网关的 `client_max_body_size 64m`（`../gw/conf.d/writer.conf`）对应 `server.ts` 的 `MAX_BODY_BYTES = 64 MiB`，改一边就得改另一边，否则应用还没看到请求体就被 nginx 413。
+- **应用只发布在 `127.0.0.1`**（`8787` 给桌面版和 mcp，`80` 是本机免端口入口，只服务 http），公网入口只有网关这一条。
+- 传输协议在 `../gw/cloudflared/config.yml` 固定为 `protocol: http2`：QUIC/UDP 7844 走本机代理时曾把 4 条连接同时打挂，连接器随之退出、公网 530 约两分钟。
+
+撤销公网访问：删掉 `../gw/conf.d/writer.conf` 并 `docker exec gw nginx -s reload`（未登记的 Host 会被网关直接 404）；要连整个 zone 的入口一起撤，就删 `gw` 隧道（私钥随隧道作废）。
 
 AI 工具（`mcp/`）同样可以指向这个域名（`WRITER_API_BASE=https://writer.sloan.dpdns.org/api`），但跑在本机时填 `http://127.0.0.1:8787/api` 更稳：少一跳、不依赖公网 DNS，隧道容器挂了也不影响。地址规则见 `mcp/README.md`。
 
@@ -160,10 +172,8 @@ npm start
 | `REFRESH_SECRET` | 是 | Refresh Token 签名密钥，≥ 32 字符且**必须与上者不同** |
 | `PORT` / `HOST` | 否 | 容器内监听端口（默认 `8787`）与地址（默认 `0.0.0.0`） |
 | `STATIC_DIR` | 否 | 静态目录，默认 `./public` |
-| `TRUST_PROXY` | 否 | 设为 `1` 时才信任 `X-Forwarded-For` 取客户端 IP（登录限速用）。走隧道时必须为 `1` |
-| `COMPOSE_PROFILES` | 否 | 置 `tunnel` 才启动 cloudflared 服务（compose 原生变量，写在 `.env` 即生效） |
-| `CF_CRED_FILE` | 开隧道时必填 | 隧道私钥路径，指向 gitignore 的 `cloudflared/credentials.json` |
-| `APP_BIND_ADDR` / `APP_PORT` | 否 | 仅 compose 用：宿主绑定地址与端口，默认 `127.0.0.1:8787` |
+| `TRUST_PROXY` | 否 | 设为 `1` 时才信任 `X-Forwarded-For` 取客户端 IP（登录限速用）。走公网入口时必须为 `1`，`gw-join.sh` 会写入 |
+| `APP_BIND_ADDR` / `APP_PORT` | 否 | 仅 compose 用：宿主绑定地址与端口，默认 `127.0.0.1:8787`；compose 另固定挂一个 `:80` 供本地域名映射用 |
 
 缺少任一项服务会直接启动失败（快速失败优于所有接口 500）。
 
