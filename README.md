@@ -131,12 +131,12 @@ docker logs -f gw             # 公网 530 / 502 时看这里
 - **`TRUST_PROXY=1` 与隧道是绑定的**。不开隧道却把 `APP_BIND_ADDR` 改成 `0.0.0.0`，局域网里任何设备都能伪造 `X-Forwarded-For`，绕过按 IP 的登录限速；`server.ts` 正是用这个头合成 `CF-Connecting-IP`。
 - **vhost 里只能写容器名**（`writing-assistant:80`），不能写 `127.0.0.1`——那是网关容器自己的回环。也故意不用 `app` 这个 compose 服务名，共享网络里别的项目若也有 `app` 会撞同一个 DNS 名。
 - **上传上限两端要对齐**：网关的 `client_max_body_size 64m`（`../gw/conf.d/writer.conf`）对应 `server.ts` 的 `MAX_BODY_BYTES = 64 MiB`，改一边就得改另一边，否则应用还没看到请求体就被 nginx 413。
-- **应用只发布在 `127.0.0.1:7001`**（容器内监听 `80`），那只是本机直连调试的入口；桌面版与 mcp 都改走公网域名 `writer.sloan.dpdns.org`（经网关），公网入口只有网关这一条。
+- **应用只发布在 `127.0.0.1:7001`**（容器内监听 `80`）：桌面版与 mcp 这类本机调用方都直连这个发布端口，不再认识自己的公网域名——域名归网关管，网关加第二个 zone 应用侧零改动；公网入口只有网关这一条，供浏览器访问。
 - 传输协议在 `../gw/cloudflared/config.yml` 固定为 `protocol: http2`：QUIC/UDP 7844 走本机代理时曾把 4 条连接同时打挂，连接器随之退出、公网 530 约两分钟。
 
 撤销公网访问：删掉 `../gw/conf.d/writer.conf` 并 `docker exec gw nginx -s reload`（未登记的 Host 会被网关直接 404）；要连整个 zone 的入口一起撤，就删 `gw` 隧道（私钥随隧道作废）。
 
-AI 工具（`mcp/`）默认就走公网域名 `https://writer.sloan.dpdns.org/api`（见 `mcp/server.mjs` 的 `DEFAULT_API_BASE`），可用 `WRITER_API_BASE` 覆盖。地址规则见 `mcp/README.md`。
+AI 工具（`mcp/`）默认走容器在本机发布的回环端口 `http://127.0.0.1:7001/api`（见 `mcp/server.mjs` 的 `DEFAULT_API_BASE`），可用 `WRITER_API_BASE` 覆盖（例如在别的机器上指向公网域名）。地址规则见 `mcp/README.md`。
 
 ## 后端
 
@@ -246,9 +246,9 @@ npm start
 
 ## 前端
 
-网页版与 API 同源，因此浏览器构建默认请求 `/api`；Tauri 桌面版没有同源可用，指向公网域名 `https://writer.sloan.dpdns.org`（经网关），不再钉死本机端口。逻辑在 `front-end/src/config/index.ts`，可用 `VITE_API_BASE_URL` 覆盖。
+网页版与 API 同源，因此浏览器构建默认请求 `/api`（用哪个域名打开都自适应）；Tauri 桌面版没有同源可用，直连容器在本机发布的回环端口上的同一个 `/api` 挂载 `http://127.0.0.1:7001/api`——域名只归网关管，本机调用方不再认识它（离开这台机器即不可用，是刻意的）。逻辑在 `front-end/src/config/index.ts`，可用 `VITE_API_BASE_URL` 覆盖。
 
-桌面版走的是公网域名，`src-tauri/tauri.conf.json` 的 CSP `connect-src` 已放行 `https://writer.sloan.dpdns.org`；若换成别的地址（LAN 直连等），记得同步把那个 origin 加进 `connect-src`，否则请求会被 webview 拦掉。改完需重新构建桌面端才生效。
+桌面版走的是 `http://127.0.0.1:7001`，`src-tauri/tauri.conf.json` 的 CSP `connect-src` 已放行该地址；若换成别的地址（公网域名、LAN 直连等），记得同步把那个 origin 加进 `connect-src`，否则请求会被 webview 拦掉。改完需重新构建桌面端才生效。
 
 ```bash
 cd front-end
