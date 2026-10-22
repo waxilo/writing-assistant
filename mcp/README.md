@@ -5,22 +5,69 @@
 创建人物/地点/设定条目、修改章节内容、全书搜索等。数据与网页端完全一致
 （同一套自托管 API）。
 
-## 安装（全局，推荐）
+**分发方式**：构建产物作为 **GitHub Release 的 asset** 发布——`server.mjs`、`latest.json`
+和两个安装脚本平铺在 `releases/latest/download/` 下，一条命令装好即可用。不经过
+npm、不需要 npm 账号、装完不依赖网络（`login` 与调用 API 除外）。容器里另有一份
+`/download/mcp/` 镜像，作为 GitHub 不通时的备用下载源。
 
+## 安装（一条命令）
+
+```powershell
+# Windows（PowerShell）
+irm https://github.com/waxilo/writing-assistant/releases/latest/download/install.ps1 | iex
+```
 ```bash
-npm install -g writing-assistant-mcp
-writing-assistant-mcp login     # 登录（凭证存 ~/.writer-mcp.json，600 权限）
+# macOS / Linux
+curl -fsSL https://github.com/waxilo/writing-assistant/releases/latest/download/install.sh | sh
 ```
 
-- **更新到最新版**：`npm install -g writing-assistant-mcp@latest`（与安装同一个命令）
-- server 启动时会自动检查 npm 最新版，落后时在终端提示更新命令
-- 安装只需成功一次，之后运行不依赖网络
+- 地址是 **GitHub Release**（`releases/latest/download` 下的所有 asset 平铺同一前缀，
+  正是脚本期望的目录结构），任何一台能上网的机器都能直接粘这段命令
+- 默认装到 `~/.writing-assistant-mcp/server.mjs`（Windows 为 `%USERPROFILE%\.writing-assistant-mcp\server.mjs`）
+- 脚本会校验 sha256、检查 node，并直接把**可粘贴的 MCP 配置**打印出来
+- 重复执行是幂等的：已是最新版本就只打印配置，不重新下载
+- **国内网络访问 GitHub 慢/不通时换镜像**（同一批文件，容器托管）：
+  - `https://writer.sloan.dpdns.org/download/mcp`（公网域名）
+  - `http://127.0.0.1:7001/download/mcp`（容器同机）
+  - Windows：`$env:WRITER_MCP_BASE="https://writer.sloan.dpdns.org/download/mcp"; irm "$env:WRITER_MCP_BASE/install.ps1" | iex`
+  - macOS/Linux：`WRITER_MCP_BASE=https://writer.sloan.dpdns.org/download/mcp sh install.sh`
 
-> **npx 方式**（可选，需每次访问 registry）：`npx -y writing-assistant-mcp`——网络受限环境请用全局安装。
+装完先登录一次（凭证存 `~/.writer-mcp.json`，600 权限）：
 
-> 环境变量可覆盖：`WRITER_MCP_CONFIG`（凭证路径）、`WRITER_API_BASE`（API 地址）。
+```bash
+node ~/.writing-assistant-mcp/server.mjs login
+```
 
-> **从 `writer-demo-mcp` 迁移**：本包原名 `writer-demo-mcp`，已停止发布。按上面的命令装新包，并把 AI 客户端配置里的 `command`（及 `mcpServers` 的键名）改成新名字。**必须重新 `login`**：云端 Worker 已下线，旧凭证里的 `apiBase` 指向不存在的地址，而且新后端换了签名密钥，旧令牌一律不认。
+## 接入 AI 客户端
+
+安装脚本最后会打印下面这段，直接粘进对应配置即可（把路径换成脚本打印的那个）：
+
+```json
+{
+  "mcpServers": {
+    "writing-assistant": {
+      "command": "node",
+      "args": ["C:\\Users\\<你>\\.writing-assistant-mcp\\server.mjs"]
+    }
+  }
+}
+```
+
+| 客户端 | 位置 |
+|---|---|
+| Claude Desktop | 菜单 → Settings → Developer → Edit Config（`claude_desktop_config.json`），改完重启 |
+| Cursor | Settings → MCP → Add new MCP server → `command` 类型 |
+| Claude Code（CLI） | `claude mcp add writing-assistant -- node ~/.writing-assistant-mcp/server.mjs` |
+
+> 若客户端报"找不到 node"，是因为 GUI 应用的环境 PATH 不含 node 所在目录——终端执行
+> `which node`（Windows：`where node`）拿到绝对路径，把配置里的 `command` 换成它。
+
+## 更新
+
+重跑同一条安装命令即可（幂等，已最新会跳过下载）。
+
+server 启动时也会向 `releases/latest/download/latest.json` 查一次版本，落后时在
+**stderr** 提示更新命令（MCP 协议走 stdout，不会被污染）。
 
 ## 工具清单
 
@@ -33,70 +80,61 @@ writing-assistant-mcp login     # 登录（凭证存 ~/.writer-mcp.json，600 �
 | `list_entries` / `read_entry` | 设定条目列表（人物/地点/设定）/ 读条目 |
 | `create_entry` / `update_entry` / `delete_entry` | 设定条目增改删 |
 
-## 快速开始
+## API 地址怎么选
 
-```bash
-cd mcp
-npm install
-npm run login        # 输入账号密码，凭证存到 ~/.writer-mcp.json（600 权限）
-```
-
-> 换环境变量可覆盖：`WRITER_MCP_CONFIG`（凭证路径）、`WRITER_API_BASE`（API 地址）。
-
-### API 地址怎么选
-
-| 场景 | `WRITER_API_BASE` |
+| 场景 | 地址 |
 |---|---|
-| 默认（同机直连容器） | 不用设，内置 `http://127.0.0.1:7001/api`（容器发布的宿主回环端口） |
-| 另一台机器走公网 | `https://writer.sloan.dpdns.org/api`（经共享网关；公网域名只归网关管） |
+| 默认 | 不用设，内置 `https://writer.sloan.dpdns.org/api`（经共享网关，任何机器可用） |
+| 与容器同机（少一跳） | `WRITER_API_BASE=http://127.0.0.1:7001/api`（不依赖公网 DNS，隧道挂了也不影响 AI 工具） |
 | 局域网另一台机器 | `http://192.168.x.x:7001/api`（需把 `.env` 的 `APP_BIND_ADDR` 改成 `0.0.0.0`） |
 
 - **末尾的 `/api` 不能省**：容器只在 `/api/*` 下提供接口，其他 GET 路径会被当成前端路由返回网页（写请求反而正常），少这个后缀的症状是"能保存但列表永远是空的"。漏了会在 `login` 时提示并自动补上。
-- **地址是随凭证保存的**（`~/.writer-mcp.json` 里的 `apiBase`），换地址要重新 `login`，改配置文件里的地址也会连带校验令牌——旧后端签发的令牌在新后端一律不认。
-- 同一台机器上直接用内置默认的 `127.0.0.1`：少一跳、不依赖公网 DNS，隧道容器挂了也不影响 AI 工具。
+- **地址随凭证保存**（`~/.writer-mcp.json` 里的 `apiBase`），换地址要重新 `login`。
+- 默认值是公网入口而不是 `127.0.0.1`：单文件可能被装到任意一台机器上，回环地址只对同机成立。
 
-## 接入 Claude Desktop
+## 为什么不再走 npm
 
-编辑 `claude_desktop_config.json`（Claude 菜单 → Settings → Developer → Edit Config）：
+原先发 `writer-demo-mcp` / `writing-assistant-mcp` 到 registry，代价是：发布要 npm 账号 +
+2FA OTP、安装端要能访问 registry、版本一多还得处理镜像源。现在改成「构建产物挂 GitHub Release」：
 
-```json
-{
-  "mcpServers": {
-    "writing-assistant": {
-      "command": "npx",
-      "args": ["-y", "writing-assistant-mcp"]
-    }
-  }
-}
-```
+- 发布 = `mcp/build.mjs` 打成单文件，`git tag mcp-v*` 触发工作流把 `dist/` 里的 4 个文件
+  上传成该 release 的 asset（也可手工上传）
+- 安装 = 从 `releases/latest/download/` 取文件，sha256 校验后落地
+- 不依赖 npm 账号；容器另存一份 `/download/mcp` 作镜像，GitHub 不通时兜底
+- **前提：仓库必须是 public**——private 仓库的 release asset 要带 token 才能下，脚本和 AI 都拿不到
 
-重启 Claude Desktop 后即可让 AI"查看我的书、新建一个人物设定、把第 3 章某个名字全局替换"等。
-
-> **提示**：若 Claude Desktop 报"找不到 npx"，是因为 GUI 应用的环境 PATH 不含 npx 所在目录——终端执行 `which npx` 拿到绝对路径，把配置改为 `"command": "/绝对路径/npx"`（如 `/usr/local/bin/npx`）。
-
-## 接入 Cursor
-
-Cursor Settings → MCP → Add new MCP server → 选择 `command` 类型：
-
-```
-command: npx
-args: -y writing-assistant-mcp
-```
-
-## 接入 Claude Code（CLI）
+## 维护者：打包与验证
 
 ```bash
-claude mcp add writing-assistant -- npx -y writing-assistant-mcp
+cd mcp
+npm ci
+npm run build          # → dist/server.mjs + dist/latest.json + 两个安装脚本
 ```
+
+发版：`git tag mcp-v0.2.0 && git push origin mcp-v0.2.0`——`.github/workflows/release-mcp.yml`
+会重建 dist 并把 4 个文件上传到该 tag 的 release。
+
+- `build.mjs` 会交叉校验 `package.json` 的 `version` 与 `server.mjs` 里的 `VERSION` 常量，
+  不一致直接失败（否则会出现"提示更新却下载到同一版本"）
+- 产物 1.1 MB、零 `node_modules`；`latest.json` 含 `sha256`/`size`，安装脚本据此校验
+- 四个 asset 必须**同时**属于同一个 release：`latest.json` 里的 `sha256` 和 `server.mjs`
+  是绑死的，混版本会让安装脚本直接校验失败
+- Dockerfile 的 `mcp` 阶段做同样的事并复制到 `public/download/mcp`，由
+  `back-end/src/server.ts` 的 `serveStatic` 直接对外（`.mjs`/`.ps1`/`.sh` 的 MIME 在
+  `server.ts` 的 `MIME` 表里；脚本必须是 `text/plain; charset=utf-8`）
+- `install.ps1` **必须保持纯 ASCII**：Windows PowerShell 5.1 会把无 BOM 的 UTF-8 按系统
+  ANSI 解码，`irm ... | iex` 会因此报"字符串缺少终止符"
+- GitHub 把 asset 的 Content-Type 打成 `application/octet-stream`，`Invoke-RestMethod`
+  不会按 JSON 解析，所以 `install.ps1` 里改成「取文本 + `ConvertFrom-Json`」
 
 ## 注意事项
 
 1. **凭证安全**：`~/.writer-mcp.json` 含登录令牌（refresh token 30 天有效），
    请勿分享或提交该文件。删除它即可让 MCP 失效。
-2. **单活跃会话**：应用采用"单会话抢占"——AI 执行**写操作**（修改章节/设定）时，
-   网页端会被下线（重新登录即可）。只读操作不影响网页端。
+2. **写操作会让网页端下线**：应用采用"单活跃会话抢占"——AI 执行**写操作**（修改章节/设定）时，
+   网页端会被要求重新登录。只读操作不影响。
 3. **token 自动续期**：server 运行期间 access token 过期会自动刷新，无需重新登录；
-   只有 refresh token 也失效时才需要重跑 `npm run login`。
+   只有 refresh token 也失效时才需要重跑 `login`。
 4. **修改正文是整体替换**：`update_chapter` 的 `content` 是全文覆盖语义；
    AI 客户端应先用 `read_chapter` 读取再修改（server 已自动处理版本冲突）。
 5. 标题语法：正文中行首 `# `（1-6 个 #）会被渲染为章节标题层级。

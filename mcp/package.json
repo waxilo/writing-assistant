@@ -1,18 +1,23 @@
 {
   "name": "writing-assistant-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "private": true,
   "type": "module",
   "description": "写作助手 MCP server：让 Claude Desktop / Cursor 等 AI 客户端读写章节正文与设定资料库（人物/地点/设定）",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "build": "node build.mjs",
     "login": "node server.mjs login",
     "start": "node server.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   },
   "license": "MIT",
   "keywords": [
@@ -26,13 +31,5 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/waxilo/writing-assistant.git"
-  },
-  "bin": {
-    "writing-assistant-mcp": "server.mjs"
-  },
-  "files": [
-    "server.mjs",
-    "README.md",
-    "LICENSE"
-  ]
+  }
 }

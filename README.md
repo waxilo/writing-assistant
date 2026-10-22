@@ -290,4 +290,17 @@ npm run tauri build  # 桌面安装包
 
 迁移前的唯一备份是 `back-end/.d1-export/dump.sql`（已 gitignore，内含密码哈希），云端那份已随 `writer-demo` 一起删除；本地文件已确认导入正确（81 行逐字段比对通过），需要长期留存的请自行归档。
 
-MCP 的 npm 包已更名为 `writing-assistant-mcp`（原 `writer-demo-mcp` 停止发布）：老用户需 `npm install -g writing-assistant-mcp`、更新 AI 客户端里的配置，并**重新 `login`**——旧凭证里的地址指向已下线的 Worker，且新后端换了签名密钥。详见 `mcp/README.md`。
+MCP server 已改为**挂在 GitHub Release 上的单文件**，不再发布 npm 包（`writing-assistant-mcp` / 旧的 `writer-demo-mcp` 都不再走 registry）：`mcp/build.mjs` 用 esbuild 打成不带 `node_modules` 的单个 `server.mjs`，和 `latest.json`、两个安装脚本一起作为 release asset 发布，一条命令即可安装：
+
+```powershell
+# Windows
+irm https://github.com/waxilo/writing-assistant/releases/latest/download/install.ps1 | iex
+```
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/waxilo/writing-assistant/releases/latest/download/install.sh | sh
+```
+
+国内访问 GitHub 慢时，把下载源换成自建镜像 `https://writer.sloan.dpdns.org/download/mcp`（容器同机则是 `http://127.0.0.1:7001/download/mcp`），见 `mcp/README.md`。
+
+装完先 `login` 一次（旧凭证指向已下线的 Worker，且新后端换了签名密钥，必须重登），再把脚本打印的 MCP 配置粘进 AI 客户端。原理与手工安装见 `mcp/README.md`。

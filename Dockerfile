@@ -23,6 +23,16 @@ COPY back-end/ ./
 # only mysql2 is needed at runtime, and it stays external to the bundle.
 RUN npm run build && npm prune --omit=dev
 
+# --- MCP server（单文件，对外下载）--------------------------------------------
+# 打成不带 node_modules 的单个 server.mjs，随镜像一起由同一个容器提供
+# （/download/mcp/），用户一条命令即可安装，全程不经过 npm。
+FROM node:24-alpine AS mcp
+WORKDIR /build
+COPY mcp/package.json mcp/package-lock.json ./
+RUN npm ci
+COPY mcp/ ./
+RUN npm run build
+
 # --- runtime ------------------------------------------------------------------
 FROM node:24-alpine
 ENV NODE_ENV=production
@@ -33,6 +43,8 @@ COPY --from=api --chown=node:node /build/package.json /build/package-lock.json .
 COPY --from=api --chown=node:node /build/node_modules ./node_modules
 COPY --from=api --chown=node:node /build/dist ./dist
 COPY --from=web --chown=node:node /build/dist ./public
+# MCP 单文件 + 安装脚本 + latest.json，落在静态目录下即可被 serveStatic 直接命中。
+COPY --from=mcp --chown=node:node /build/dist ./public/download/mcp
 
 USER node
 EXPOSE 80

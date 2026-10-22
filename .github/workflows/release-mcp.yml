@@ -1,0 +1,71 @@
+name: Release MCP
+
+# MCP 单文件随 tag 发布。安装脚本按 `releases/latest/download/<file>` 取文件，
+# 所以 asset 名必须和 dist/ 里的文件名一致，且 4 个文件必须属于同一个 release
+# （latest.json 里的 sha256 与 server.mjs 是绑死的，混版本会让安装脚本校验失败）。
+#
+#   git tag mcp-v0.2.0 && git push origin mcp-v0.2.0
+on:
+  push:
+    tags: ["mcp-v*"]
+
+concurrency:
+  group: release-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+      - name: Install
+        working-directory: mcp
+        run: npm ci
+      - name: Build single file
+        working-directory: mcp
+        run: npm run build
+      - name: Verify tag matches built version
+        working-directory: mcp
+        run: |
+          tag="${GITHUB_REF_NAME#mcp-v}"
+          built="$(node -p "require('./dist/latest.json').version")"
+          echo "tag=$tag built=$built"
+          if [ "$tag" != "$built" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the built version $built"
+            exit 1
+          fi
+      - name: Publish assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: writing-assistant-mcp ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: |
+            MCP server 单文件（不需要 npm）。
+
+            ```powershell
+            # Windows
+            irm https://github.com/waxilo/writing-assistant/releases/latest/download/install.ps1 | iex
+            ```
+            ```bash
+            # macOS / Linux
+            curl -fsSL https://github.com/waxilo/writing-assistant/releases/latest/download/install.sh | sh
+            ```
+
+            下载源换成自有镜像：`https://writer.sloan.dpdns.org/download/mcp`
+          files: |
+            mcp/dist/server.mjs
+            mcp/dist/latest.json
+            mcp/dist/install.ps1
+            mcp/dist/install.sh

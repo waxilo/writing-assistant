@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# MCP 单文件产物（`npm run build` 生成，由镜像构建时重新打）
+mcp/dist/
+# 会话临时产物（下载的 tarball、安装脚本试跑目录等）
+.workbuddy/tmp/
 .vscode/
 .npm-cache/
 .DS_Store

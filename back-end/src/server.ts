@@ -46,6 +46,11 @@ const env: Env = {
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  // /download/mcp/ 下的 MCP 单文件与安装脚本：.mjs 直接可执行，
+  // 脚本必须是 text/plain + charset=utf-8，否则 `irm ... | iex` 会按 ANSI 解码。
+  ".mjs": "text/javascript; charset=utf-8",
+  ".ps1": "text/plain; charset=utf-8",
+  ".sh": "text/plain; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".webmanifest": "application/manifest+json",

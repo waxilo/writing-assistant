@@ -4,9 +4,13 @@
 // 章节正文与设定资料库。通过用户账号凭证（~/.writer-mcp.json）调用自托管的
 // 写作助手 API，access token 过期时自动用 refresh token 续期。
 //
+// 分发：`mcp/build.mjs` 用 esbuild 打成单文件（无 node_modules、不需要 npm 账号），
+// 作为 GitHub Release 的 asset 发布，安装脚本见 mcp/install.ps1 / install.sh。
+// 镜像里也留了一份同样的产物（/download/mcp/）作为备用镜像站。
+//
 // 运行：
-//   writing-assistant-mcp           启动 MCP server（stdio 传输，由客户端拉起）
-//   writing-assistant-mcp login     交互登录并保存凭证
+//   node server.mjs          启动 MCP server（stdio 传输，由客户端拉起）
+//   node server.mjs login    交互登录并保存凭证
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,7 +18,13 @@ import { join, dirname } from "node:path";
 
 const CONFIG_PATH =
   process.env.WRITER_MCP_CONFIG || join(homedir(), ".writer-mcp.json");
-const DEFAULT_API_BASE = "http://127.0.0.1:7001/api";
+
+/**
+ * 默认连公网入口，而不是本机 127.0.0.1：单文件是从 GitHub 下载的，装的人可能在
+ * 任意一台机器上，回环地址只对"和容器同机"这一种情况成立。同机用户想省一跳，
+ * 把 WRITER_API_BASE 指回 http://127.0.0.1:7001/api 即可（login 时生效并写进凭证）。
+ */
+const DEFAULT_API_BASE = "https://writer.sloan.dpdns.org/api";
 
 /**
  * The self-hosted container mounts the API under `/api`; for GET requests every
@@ -29,8 +39,19 @@ function withApiSuffix(base, { warn = false } = {}) {
   if (warn) console.error(`⚠️ API 地址缺少 /api 后缀，已按 ${trimmed}/api 访问`);
   return `${trimmed}/api`;
 }
-/** 发布到 npm 的当前版本（发布时同步更新）。 */
-const VERSION = "0.1.0";
+/** 打包版本号：`npm run build` 会拿它和 package.json 交叉校验，避免打错版本。 */
+const VERSION = "0.2.0";
+
+/**
+ * 产物发布在 GitHub Release 的 asset 里（`releases/latest/download/` 下所有 asset
+ * 平铺在同一个 URL 前缀，正好是安装脚本期望的目录结构）。容器也镜像了一份
+ * `/download/mcp`，需要时把这里换掉即可。
+ */
+const UPDATE_BASE =
+  "https://github.com/waxilo/writing-assistant/releases/latest/download";
+
+/** 安装目录里的单文件自己就是入口；提示登录/更新时用它，比写死包名可靠。 */
+const SELF = process.argv[1] ?? "server.mjs";
 
 // --- `login` subcommand -------------------------------------------------------
 
@@ -120,19 +141,20 @@ if (process.argv[2] === "login") {
 }
 
 /**
- * 启动时检查 npm 最新版本，落后时在 stderr 提示更新命令。
+ * 启动时向发布地址查最新版本，落后时在 stderr 提示更新命令。
  * （MCP 协议走 stdout，stderr 不会被解析，安全。）
  */
 async function checkForUpdate() {
   try {
-    const res = await fetch("https://registry.npmjs.org/writing-assistant-mcp/latest", {
+    const res = await fetch(`${UPDATE_BASE}/latest.json`, {
       signal: AbortSignal.timeout(5000),
     });
     const json = await res.json();
     if (json.version && json.version !== VERSION) {
       console.error(
-        `[writing-assistant-mcp] 发现新版本 v${json.version}（当前 v${VERSION}）。` +
-          `更新：npm install -g writing-assistant-mcp@latest；或改用 npx -y writing-assistant-mcp 自动获取最新。`
+        `[writing-assistant-mcp] 发现新版本 v${json.version}（当前 v${VERSION}）。\n` +
+          `  更新：Windows    irm ${UPDATE_BASE}/install.ps1 | iex\n` +
+          `        macOS/Linux  curl -fsSL ${UPDATE_BASE}/install.sh | sh`
       );
     }
   } catch {
@@ -159,7 +181,7 @@ function loadConfig() {
     config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
     throw new Error(
-      `未找到凭证 ${CONFIG_PATH}。请先运行：writing-assistant-mcp login（输入账号密码登录）`
+      `未找到凭证 ${CONFIG_PATH}。请先运行：node "${SELF}" login（输入账号密码登录）`
     );
   }
 }
@@ -178,7 +200,7 @@ async function refreshTokens() {
   });
   const json = await res.json().catch(() => null);
   if (!json || json.code !== 200 || !json.data) {
-    throw new Error("登录已过期，请重新运行 writing-assistant-mcp login");
+    throw new Error(`登录已过期，请重新运行 node "${SELF}" login`);
   }
   config.accessToken = json.data.accessToken;
   config.refreshToken = json.data.refreshToken;
